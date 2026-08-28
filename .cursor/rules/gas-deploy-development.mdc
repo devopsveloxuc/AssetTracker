@@ -10,9 +10,9 @@ When shipping EquipCareAI Apps Script changes after code edits, **do not clasp-d
 ## 1. GitHub first
 
 1. Commit the relevant changes (only when the user asks to commit, or when they asked to ship/deploy and commit is required to push).
-2. Push to the GitHub remote (`origin`) on the current branch.
+2. Push to GitHub remote `origin` → [devopsveloxuc/AssetTracker](https://github.com/devopsveloxuc/AssetTracker) on the current branch.
 3. Confirm the push succeeded before any clasp step.
-4. If there is no GitHub remote, stop and set one up (or ask the user) — do not skip to GAS.
+4. If `origin` is missing or not AssetTracker, stop and fix remotes (or ask the user) — do not skip to GAS.
 
 ## 2. Then GAS (clasp)
 
