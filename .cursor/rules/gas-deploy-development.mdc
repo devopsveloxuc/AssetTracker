@@ -1,11 +1,20 @@
 ---
-description: Default EquipCareAI clasp deploys to the development web app
+description: GitHub first, then EquipCareAI clasp deploy to development
 alwaysApply: true
 ---
 
-# EquipCareAI Apps Script deploy target
+# EquipCareAI deploy: GitHub → GAS
 
-When pushing or deploying EquipCareAI GAS changes after code edits:
+When shipping EquipCareAI Apps Script changes after code edits, **do not clasp-deploy from uncommitted/unpushed work**. Order:
+
+## 1. GitHub first
+
+1. Commit the relevant changes (only when the user asks to commit, or when they asked to ship/deploy and commit is required to push).
+2. Push to the GitHub remote (`origin`) on the current branch.
+3. Confirm the push succeeded before any clasp step.
+4. If there is no GitHub remote, stop and set one up (or ask the user) — do not skip to GAS.
+
+## 2. Then GAS (clasp)
 
 1. Run `clasp push` (usually `--force`).
 2. Create a new version with `clasp version "<short description>"`.
@@ -18,4 +27,9 @@ When pushing or deploying EquipCareAI GAS changes after code edits:
 
    - **production** ID: `AKfycbwEzoeFO4LE29fNtuFyO5SvNVSdQnOb_GCxgHrgVT-B5eHBRS8mC-en73XrU29zLB-6`
 
-5. After deploy, briefly report which target was updated (development vs production) and the version number.
+## 3. Report
+
+After deploy, briefly report:
+
+- GitHub: branch + commit (short SHA)
+- GAS: target (development vs production) + version number
