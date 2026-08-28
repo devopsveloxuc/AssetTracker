@@ -1,0 +1,1482 @@
+<script>
+var _canManageAssets = false;
+var _canManageUsers = false;
+var _assetsByNumber = {};
+var _assetsById = {};
+var _assetListRows = [];
+var _assetSearchInited = false;
+var _auditAsset = null;
+var _auditFormInited = false;
+var _lastAuditId = null;
+var _auditHistoryActionsInited = false;
+var _webAppUrl = '';
+var _pendingBootAsset = typeof _bootAssetNumber === 'string' ? _bootAssetNumber : '';
+var _pageMode = typeof _bootPageMode === 'string' ? String(_bootPageMode).trim().toLowerCase() : '';
+
+var AUDIT_GRADES = ['Pass', 'Needs Attention', 'Fail', 'N/A'];
+
+function toast(msg) {
+  var el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.getElementById('toast-root').appendChild(el);
+  setTimeout(function () {
+    el.remove();
+  }, 3200);
+}
+
+function escapeHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function escapeAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;');
+}
+
+function assetSearchableText_(a) {
+  return [
+    a.assetId,
+    a.assetNumber,
+    a.capitalToolNumber,
+    a.category,
+    a.subCategory,
+    a.status,
+    a.year,
+    a.make,
+    a.model,
+    a.description,
+    a.vinSerial,
+    a.licensed,
+    a.plateNumber,
+    a.maxPmIntervalDays,
+    a.maxPmHoursMileage,
+    a.notes,
+    a.assetType,
+    a.active
+  ]
+    .map(function (x) {
+      return String(x || '').toLowerCase();
+    })
+    .join(' ');
+}
+
+function filterAssetsByQuery_(rows, q) {
+  q = String(q || '')
+    .trim()
+    .toLowerCase();
+  if (!q) return rows.slice();
+  return rows.filter(function (a) {
+    return assetSearchableText_(a).indexOf(q) !== -1;
+  });
+}
+
+function setAssetSearchVisible(show) {
+  var w = document.getElementById('assetSearchWrap');
+  if (!w) return;
+  if (show) w.classList.remove('hidden');
+  else w.classList.add('hidden');
+}
+
+/** Columns match vc.assets_main / Excel Main sheet (Asset ID omitted — internal only). */
+var ASSET_GRID_COLS_ = [
+  { key: 'assetNumber', label: 'Asset Number' },
+  { key: 'capitalToolNumber', label: 'Capital Tool Number' },
+  { key: 'category', label: 'Category' },
+  { key: 'subCategory', label: 'Sub Category' },
+  { key: 'status', label: 'Status' },
+  { key: 'year', label: 'Year' },
+  { key: 'make', label: 'Make' },
+  { key: 'model', label: 'Model' },
+  { key: 'description', label: 'Description' },
+  { key: 'vinSerial', label: 'Serial Number/VIN' },
+  { key: 'licensed', label: 'Licensed?' },
+  { key: 'plateNumber', label: 'License Plate #' },
+  { key: 'maxPmIntervalDays', label: 'Max PM Interval Days' },
+  { key: 'maxPmHoursMileage', label: 'Max PM Hours/Mileage' },
+  { key: 'notes', label: 'Notes' }
+];
+
+function assetGridCell_(a, key) {
+  var v = a && a[key];
+  if (v == null || v === '') return '—';
+  return String(v);
+}
+
+function iconSvgEdit_() {
+  return (
+    '<svg class="asset-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+    'd="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>'
+  );
+}
+
+function iconSvgDelete_() {
+  return (
+    '<svg class="asset-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" ' +
+    'd="M6 6l12 12M18 6L6 18"/></svg>'
+  );
+}
+
+/** Clipboard + check — audit / inspection. */
+function iconSvgAudit_() {
+  return (
+    '<svg class="asset-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+    'd="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z"/>' +
+    '<rect x="5" y="5" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>' +
+    '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" ' +
+    'd="M8.5 13.5l2.2 2.2 4.8-5.2"/></svg>'
+  );
+}
+
+function iconSvgQr_() {
+  return (
+    '<svg class="asset-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path fill="currentColor" d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm10 0h2v2h-2v-2zm4 0h2v2h-2v-2zm-4 4h2v2h-2v-2zm2 2h2v2h-2v-2zm2-2h2v2h-2v-2zm0-4h2v2h-2v-2z"/></svg>'
+  );
+}
+
+function iconSvgAssign_() {
+  return (
+    '<svg class="asset-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+    'd="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>' +
+    '<circle cx="9" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/>' +
+    '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+    'd="M19 8v6M22 11h-6"/></svg>'
+  );
+}
+
+function assetDeepLink_(assetNumber) {
+  var num = String(assetNumber || '').trim();
+  if (!num) return '';
+  var base = String(_webAppUrl || '').trim();
+  if (!base) return num;
+  var sep = base.indexOf('?') >= 0 ? '&' : '?';
+  return base + sep + 'page=audit&asset=' + encodeURIComponent(num);
+}
+
+function assignDeepLink_(assetId) {
+  var id = String(assetId || '').trim();
+  if (!id) return '';
+  var base = String(_webAppUrl || '').trim();
+  if (!base) return '';
+  var sep = base.indexOf('?') >= 0 ? '&' : '?';
+  return base + sep + 'page=assign&assetId=' + encodeURIComponent(id);
+}
+
+function openUrlInNewTab_(url) {
+  var href = String(url || '').trim();
+  if (!href) {
+    toast('Web app URL is not available yet — refresh and try again');
+    return false;
+  }
+  var win = window.open(href, '_blank', 'noopener,noreferrer');
+  if (!win) {
+    toast('Pop-up blocked — allow pop-ups for this site');
+    return false;
+  }
+  return true;
+}
+
+function assetActionsCellHtml_(a) {
+  var num = String(a.assetNumber || '').trim();
+  var id = a.assetId != null && a.assetId !== '' ? String(a.assetId) : '';
+  var numAttr = num ? ' data-asset="' + escapeAttr(encodeURIComponent(num)) + '"' : '';
+  var idAttr = id ? ' data-asset-id="' + escapeAttr(id) + '"' : '';
+  var parts = [];
+  if (num) {
+    parts.push(
+      '<button type="button" class="asset-action-btn asset-action-labeled" data-action="qr"' +
+        numAttr +
+        idAttr +
+        ' title="QR code" aria-label="QR code">' +
+        iconSvgQr_() +
+        '<span>QR</span></button>'
+    );
+    parts.push(
+      '<button type="button" class="asset-action-btn asset-action-labeled" data-action="audit"' +
+        numAttr +
+        idAttr +
+        ' title="EquipCare AI inspection" aria-label="EquipCare AI">' +
+        iconSvgAudit_() +
+        '<span>Audit</span></button>'
+    );
+  }
+  if (_canManageAssets && id) {
+    parts.push(
+      '<button type="button" class="asset-action-btn asset-action-labeled" data-action="assign"' +
+        numAttr +
+        idAttr +
+        ' title="Assign employee, project, and location" aria-label="Assign">' +
+        iconSvgAssign_() +
+        '<span>Assign</span></button>'
+    );
+  }
+  if (_canManageAssets) {
+    parts.push(
+      '<button type="button" class="asset-action-btn" data-action="edit"' +
+        numAttr +
+        idAttr +
+        ' title="Edit asset" aria-label="Edit asset">' +
+        iconSvgEdit_() +
+        '</button>'
+    );
+    parts.push(
+      '<button type="button" class="asset-action-btn asset-action-danger" data-action="delete"' +
+        numAttr +
+        idAttr +
+        ' title="Delete asset" aria-label="Delete asset">' +
+        iconSvgDelete_() +
+        '</button>'
+    );
+  }
+  return '<td class="asset-actions-cell">' + (parts.length ? '<div class="asset-actions">' + parts.join('') + '</div>' : '') + '</td>';
+}
+
+function findAssetFromActionBtn_(btn) {
+  if (!btn) return null;
+  var id = btn.getAttribute('data-asset-id');
+  if (id && _assetsById[id]) return _assetsById[id];
+  var enc = btn.getAttribute('data-asset');
+  if (enc) {
+    var num = decodeURIComponent(enc);
+    if (_assetsByNumber[num]) return _assetsByNumber[num];
+  }
+  return null;
+}
+
+function renderAssetRows_(rows) {
+  var el = document.getElementById('assetList');
+  var thead =
+    '<thead><tr>' +
+    '<th class="asset-actions-th" scope="col"><span class="sr-only">Actions</span></th>' +
+    ASSET_GRID_COLS_.map(function (c) {
+      return '<th scope="col">' + escapeHtml(c.label) + '</th>';
+    }).join('') +
+    '</tr></thead>';
+  var tbody =
+    '<tbody>' +
+    rows
+      .map(function (a) {
+        var cells =
+          assetActionsCellHtml_(a) +
+          ASSET_GRID_COLS_.map(function (c) {
+            return (
+              '<td title="' +
+              escapeAttr(assetGridCell_(a, c.key)) +
+              '">' +
+              escapeHtml(assetGridCell_(a, c.key)) +
+              '</td>'
+            );
+          }).join('');
+        return '<tr>' + cells + '</tr>';
+      })
+      .join('') +
+    '</tbody>';
+  el.innerHTML =
+    '<div class="assets-grid-wrap">' +
+    '<table class="assets-grid">' +
+    thead +
+    tbody +
+    '</table></div>' +
+    '<p class="muted small assets-grid-hint">Showing ' +
+    rows.length +
+    ' asset' +
+    (rows.length === 1 ? '' : 's') +
+    '. Use the row buttons to edit, delete, or open EquipCare AI.</p>';
+}
+
+function applyAssetFilter() {
+  var el = document.getElementById('assetList');
+  var inp = document.getElementById('assetSearch');
+  var q = inp ? inp.value : '';
+  if (!_assetListRows.length) return;
+  var filtered = filterAssetsByQuery_(_assetListRows, q);
+  if (!filtered.length) {
+    el.innerHTML =
+      '<p class="muted">' +
+      (String(q).trim()
+        ? 'No assets match your search. Try different words or clear the filter.'
+        : 'No matching assets.') +
+      '</p>';
+    return;
+  }
+  renderAssetRows_(filtered);
+}
+
+function initAssetSearchOnce() {
+  if (_assetSearchInited) return;
+  _assetSearchInited = true;
+  var inp = document.getElementById('assetSearch');
+  if (!inp) return;
+  inp.addEventListener('input', applyAssetFilter);
+  var clearBtn = document.getElementById('assetSearchClear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      inp.value = '';
+      inp.focus();
+      applyAssetFilter();
+    });
+  }
+}
+
+function loadEquipmentTypesForDropdown() {
+  var sel = document.getElementById('ins_equipment_type');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        sel.innerHTML = '<option value="">Could not load types</option>';
+        return;
+      }
+      var types = r.types || [];
+      sel.innerHTML =
+        '<option value="">Select equipment type…</option>' +
+        types
+          .map(function (t) {
+            return '<option value="' + escapeAttr(t) + '">' + escapeHtml(t) + '</option>';
+          })
+          .join('');
+    })
+    .withFailureHandler(function () {
+      sel.innerHTML = '<option value="">Could not load types</option>';
+    })
+    .apiListEquipmentTypes();
+}
+
+function openAiSummaryModal(text) {
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="aiSumOv">' +
+    '<div class="modal modal-wide"><h3>AI inspection review</h3>' +
+    '<p class="muted small">Based on the last 5 inspections for this asset and recent photos (OpenAI).</p>' +
+    '<pre class="ai-summary-pre"></pre>' +
+    '<div class="form-actions"><button type="button" class="btn btn-primary" id="aiSumClose">Close</button></div>' +
+    '</div></div>';
+  root.querySelector('.ai-summary-pre').textContent = text || '(No text returned)';
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('aiSumClose').onclick = close;
+  document.getElementById('aiSumOv').onclick = function (e) {
+    if (e.target.id === 'aiSumOv') close();
+  };
+}
+
+function generateInspectionReport(auditId) {
+  auditId = String(auditId || '').trim();
+  if (!auditId) return;
+  toast('Building report… (AI may take a short while)');
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        toast((r && r.error) || 'Report failed');
+        return;
+      }
+      var blob = new Blob([r.html], { type: 'text/html;charset=utf-8' });
+      var u = URL.createObjectURL(blob);
+      var w = window.open(u, '_blank', 'noopener');
+      if (!w) toast('Allow pop-ups to view the report');
+    })
+    .withFailureHandler(function (e) {
+      toast(String(e));
+    })
+    .apiGenerateInspectionReport(auditId);
+}
+
+function initAuditHistoryActionsOnce() {
+  if (_auditHistoryActionsInited) return;
+  _auditHistoryActionsInited = true;
+  document.getElementById('auditHistory').addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn-audit-report');
+    if (!btn) return;
+    var id = btn.getAttribute('data-audit');
+    if (id) generateInspectionReport(decodeURIComponent(id));
+  });
+}
+
+function initAuditFormControls() {
+  if (_auditFormInited) return;
+  _auditFormInited = true;
+  ['aud_condition', 'aud_housekeeping', 'aud_mechanical', 'aud_safety', 'aud_documents'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = AUDIT_GRADES.map(function (g) {
+      return '<option value="' + escapeAttr(g) + '">' + escapeHtml(g) + '</option>';
+    }).join('');
+  });
+  ['aud_condition', 'aud_mechanical', 'aud_safety'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', updateAuditNoteVisibility);
+  });
+  var back = document.getElementById('btnBackAssets');
+  if (back) {
+    back.onclick =
+      _pageMode === 'audit'
+        ? function () {
+            window.close();
+          }
+        : closeAuditView;
+  }
+  var submitBtn = document.getElementById('aud_submit');
+  if (submitBtn) submitBtn.onclick = submitAudit;
+}
+
+function updateAuditNoteVisibility() {
+  function set(selId, wrapId) {
+    var v = document.getElementById(selId).value;
+    var show = v !== 'Pass' && v !== 'N/A';
+    document.getElementById(wrapId).style.display = show ? 'block' : 'none';
+    if (!show) {
+      var ta = document.getElementById(
+        selId === 'aud_condition'
+          ? 'aud_note_condition'
+          : selId === 'aud_mechanical'
+            ? 'aud_note_mechanical'
+            : 'aud_note_safety'
+      );
+      if (ta) ta.value = '';
+    }
+  }
+  set('aud_condition', 'wrap_note_condition');
+  set('aud_mechanical', 'wrap_note_mechanical');
+  set('aud_safety', 'wrap_note_safety');
+}
+
+function todayIsoDate() {
+  var d = new Date();
+  var y = d.getFullYear();
+  var m = String(d.getMonth() + 1).padStart(2, '0');
+  var day = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
+function setMainTab_(tab) {
+  tab = tab === 'inspection' ? 'inspection' : 'assets';
+  var tabAssets = document.getElementById('tabAssets');
+  var tabInsp = document.getElementById('tabInspection');
+  var assetsView = document.getElementById('assetsView');
+  var auditView = document.getElementById('auditView');
+  if (tab === 'inspection') {
+    if (tabAssets) {
+      tabAssets.classList.remove('active');
+      tabAssets.setAttribute('aria-selected', 'false');
+    }
+    if (tabInsp) {
+      tabInsp.classList.remove('hidden');
+      tabInsp.classList.add('active');
+      tabInsp.setAttribute('aria-selected', 'true');
+    }
+    if (assetsView) assetsView.classList.add('hidden');
+    if (auditView) auditView.classList.remove('hidden');
+  } else {
+    if (tabAssets) {
+      tabAssets.classList.add('active');
+      tabAssets.setAttribute('aria-selected', 'true');
+    }
+    if (tabInsp) {
+      tabInsp.classList.remove('active');
+      tabInsp.setAttribute('aria-selected', 'false');
+      if (!_auditAsset) tabInsp.classList.add('hidden');
+    }
+    if (assetsView) assetsView.classList.remove('hidden');
+    if (auditView) auditView.classList.add('hidden');
+  }
+}
+
+function openAuditView(assetNumber) {
+  initAuditFormControls();
+  _auditAsset = _assetsByNumber[assetNumber];
+  if (!_auditAsset) {
+    toast('Asset not found — refresh the list');
+    return;
+  }
+  setMainTab_('inspection');
+  document.getElementById('auditAssetTitle').textContent = 'EquipCare AI: ' + _auditAsset.assetNumber;
+  document.getElementById('auditAssetMeta').textContent =
+    (_auditAsset.description || '—') +
+    ' · ' +
+    (_auditAsset.category || _auditAsset.assetType || '—') +
+    ' · ' +
+    (_auditAsset.status || '—');
+  var meterWrap = document.getElementById('aud_meter_wrap');
+  var mt = String(_auditAsset.meterType || 'None');
+  if (mt === 'None' || !mt) {
+    meterWrap.style.display = 'none';
+    document.getElementById('aud_meter').value = '';
+  } else {
+    meterWrap.style.display = 'block';
+    document.getElementById('aud_meter').placeholder = mt === 'Hours' ? 'Engine hours' : 'Odometer / miles';
+  }
+  document.getElementById('aud_date').value = todayIsoDate();
+  document.getElementById('aud_meter').value = '';
+  ['aud_condition', 'aud_housekeeping', 'aud_mechanical', 'aud_safety', 'aud_documents'].forEach(function (id) {
+    document.getElementById(id).value = 'Pass';
+  });
+  ['aud_note_condition', 'aud_note_mechanical', 'aud_note_safety', 'aud_other'].forEach(function (id) {
+    document.getElementById(id).value = '';
+  });
+  updateAuditNoteVisibility();
+  _lastAuditId = null;
+  document.getElementById('photoThumbs').innerHTML = '';
+  var pf = document.getElementById('ph_file');
+  if (pf) pf.value = '';
+  var eqSel = document.getElementById('ins_equipment_type');
+  if (eqSel) eqSel.value = '';
+  loadEquipmentTypesForDropdown();
+  initAuditHistoryActionsOnce();
+  loadAuditHistory(assetNumber);
+}
+
+function closeAuditView() {
+  _auditAsset = null;
+  _lastAuditId = null;
+  var tabInsp = document.getElementById('tabInspection');
+  if (tabInsp) tabInsp.classList.add('hidden');
+  setMainTab_('assets');
+}
+
+/** Builds per-file EXIF meta; shows metadata warnings via toast; invokes cb(metas). */
+function buildPhotoMetasWithWarnings(files, cb) {
+  if (!files || !files.length) {
+    cb([]);
+    return;
+  }
+  var exifFn = window.ecExtractExifFromFile;
+  if (typeof exifFn !== 'function') {
+    cb(
+      files.map(function () {
+        return { metaDateTime: '', metaLat: '', metaLng: '' };
+      })
+    );
+    return;
+  }
+  var metas = [];
+  var missingDate = 0;
+  var missingGps = 0;
+  var unsupported = 0;
+  var chain = Promise.resolve();
+  files.forEach(function (file) {
+    chain = chain.then(function () {
+      return exifFn(file).then(function (ex) {
+        ex = ex || {};
+        var d = ex.dateTimeOriginal ? String(ex.dateTimeOriginal).trim() : '';
+        var lat = ex.lat != null && ex.lat !== '' ? String(ex.lat) : '';
+        var lng = ex.lng != null && ex.lng !== '' ? String(ex.lng) : '';
+        if (ex._unsupportedFormat) unsupported++;
+        if (!d) missingDate++;
+        if ((!lat || !lng) && !ex._unsupportedFormat) missingGps++;
+        metas.push({
+          metaDateTime: d.substring(0, 80),
+          metaLat: lat.substring(0, 32),
+          metaLng: lng.substring(0, 32)
+        });
+      });
+    });
+  });
+  chain
+    .then(function () {
+      var parts = [];
+      if (missingDate) {
+        parts.push(
+          missingDate +
+            ' photo(s) have no camera date/time in metadata (JPEG from the camera works best).'
+        );
+      }
+      if (missingGps) {
+        parts.push(
+          missingGps + ' photo(s) have no GPS location in metadata (enable location when taking pictures).'
+        );
+      }
+      if (unsupported) {
+        parts.push(unsupported + ' file(s) are not JPEG — EXIF check was skipped for those.');
+      }
+      if (parts.length) toast('Metadata: ' + parts.join(' '));
+      cb(metas);
+    })
+    .catch(function (e) {
+      toast(String(e));
+      cb(
+        files.map(function () {
+          return { metaDateTime: '', metaLat: '', metaLng: '' };
+        })
+      );
+    });
+}
+
+function readFileAsDataURL(file) {
+  return new Promise(function (resolve, reject) {
+    var fr = new FileReader();
+    fr.onload = function () {
+      resolve(fr.result);
+    };
+    fr.onerror = reject;
+    fr.readAsDataURL(file);
+  });
+}
+
+function uploadPhotosWithAuditId(files, idx, metas, auditId, done) {
+  metas = metas || [];
+  auditId = String(auditId || '').trim();
+  if (!auditId) {
+    if (done) done();
+    return;
+  }
+  if (idx >= files.length) {
+    if (done) done();
+    return;
+  }
+  var meta = metas[idx] || { metaDateTime: '', metaLat: '', metaLng: '' };
+  var eqVal = document.getElementById('ins_equipment_type').value.trim();
+  readFileAsDataURL(files[idx])
+    .then(function (dataUrl) {
+      google.script.run
+        .withSuccessHandler(function (r) {
+          if (!r || !r.ok) {
+            toast((r && r.error) || 'Photo upload failed');
+            if (done) done();
+            return;
+          }
+          uploadPhotosWithAuditId(files, idx + 1, metas, auditId, done);
+        })
+        .withFailureHandler(function (e) {
+          toast(String(e));
+          if (done) done();
+        })
+        .apiUploadAuditPhoto({
+          auditId: auditId,
+          assetNumber: _auditAsset.assetNumber,
+          equipmentType: eqVal,
+          dataUrl: dataUrl,
+          metaDateTime: meta.metaDateTime,
+          metaLat: meta.metaLat,
+          metaLng: meta.metaLng
+        });
+    })
+    .catch(function (e) {
+      toast(String(e));
+      if (done) done();
+    });
+}
+
+function loadAuditPhotos(auditIdOverride) {
+  var id =
+    auditIdOverride != null && String(auditIdOverride).trim() !== ''
+      ? String(auditIdOverride).trim()
+      : _lastAuditId;
+  if (!id) return;
+  var box = document.getElementById('photoThumbs');
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        box.innerHTML = '<p class="muted small">' + escapeHtml((r && r.error) || '') + '</p>';
+        return;
+      }
+      var list = r.photos || [];
+      if (!list.length) {
+        box.innerHTML = '<p class="muted small">No photos for this inspection yet.</p>';
+        return;
+      }
+      box.innerHTML = list
+        .map(function (p) {
+          var u = p.url || '';
+          var metaLines = [];
+          if (p.metaDateTime) metaLines.push('Camera: ' + p.metaDateTime);
+          if (p.metaLat && p.metaLng) metaLines.push('GPS: ' + p.metaLat + ', ' + p.metaLng);
+          if (p.equipmentType) metaLines.push('Type: ' + p.equipmentType);
+          return (
+            '<div class="photo-thumb-wrap"><a href="' +
+            escapeAttr(u) +
+            '" target="_blank" rel="noopener"><img class="photo-thumb" src="' +
+            escapeAttr(u) +
+            '" alt="" loading="lazy" /></a>' +
+            (metaLines.length
+              ? '<div class="photo-thumb-notes">' + escapeHtml(metaLines.join(' · ')) + '</div>'
+              : '') +
+            '<div class="photo-thumb-notes">' +
+            escapeHtml(p.uploadedAt || '') +
+            '</div></div>'
+          );
+        })
+        .join('');
+    })
+    .withFailureHandler(function (e) {
+      box.innerHTML = '<p class="muted small">' + escapeHtml(String(e)) + '</p>';
+    })
+    .apiListAuditPhotos(id);
+}
+
+function loadAuditHistory(assetNumber) {
+  var hist = document.getElementById('auditHistory');
+  hist.innerHTML = '<p class="muted small" style="margin:0;padding:12px;">Loading history…</p>';
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        hist.innerHTML =
+          '<p class="muted small" style="margin:0;padding:12px;">' +
+          escapeHtml((r && r.error) || 'Could not load history') +
+          '</p>';
+        return;
+      }
+      var list = r.audits || [];
+      if (!list.length) {
+        hist.innerHTML =
+          '<p class="muted small" style="margin:0;padding:12px;">No prior inspections for this asset.</p>';
+        return;
+      }
+      list.sort(function (a, b) {
+        return String(b.dateAudited || '').localeCompare(String(a.dateAudited || ''));
+      });
+      hist.innerHTML = list
+        .map(function (x) {
+          var aid = encodeURIComponent(x.auditId || '');
+          return (
+            '<div class="audit-past-row">' +
+            '<div class="audit-past-main">' +
+            '<div class="audit-past-date">' +
+            escapeHtml(x.dateAudited || '—') +
+            '</div><div class="audit-past-meta">' +
+            escapeHtml(x.performedBy || '') +
+            (x.auditType ? ' · ' + escapeHtml(x.auditType) : '') +
+            (x.equipmentType ? ' · Type: ' + escapeHtml(x.equipmentType) : '') +
+            ' · C:' +
+            escapeHtml(x.condition || '') +
+            ' · H:' +
+            escapeHtml(x.housekeeping || '') +
+            ' · M:' +
+            escapeHtml(x.mechanicalItems || '') +
+            ' · S:' +
+            escapeHtml(x.safetyItems || '') +
+            ' · Doc:' +
+            escapeHtml(x.documents || '') +
+            '</div></div>' +
+            '<button type="button" class="btn btn-ghost btn-sm btn-audit-report" data-audit="' +
+            escapeAttr(aid) +
+            '">Report</button></div>'
+          );
+        })
+        .join('');
+    })
+    .withFailureHandler(function (e) {
+      hist.innerHTML =
+        '<p class="muted small" style="margin:0;padding:12px;">' + escapeHtml(String(e)) + '</p>';
+    })
+    .apiListAuditsForAsset(assetNumber);
+}
+
+function submitAudit() {
+  if (!_auditAsset) return;
+  var eqType = document.getElementById('ins_equipment_type').value.trim();
+  if (!eqType) {
+    toast('Select an equipment type before submitting');
+    return;
+  }
+  var payload = {
+    auditId: '',
+    assetNumber: _auditAsset.assetNumber,
+    equipmentType: eqType,
+    dateAudited: document.getElementById('aud_date').value,
+    meterReading: document.getElementById('aud_meter').value,
+    condition: document.getElementById('aud_condition').value,
+    housekeeping: document.getElementById('aud_housekeeping').value,
+    mechanicalItems: document.getElementById('aud_mechanical').value,
+    safetyItems: document.getElementById('aud_safety').value,
+    documents: document.getElementById('aud_documents').value,
+    conditionNotes: document.getElementById('aud_note_condition').value.trim(),
+    mechanicalNotes: document.getElementById('aud_note_mechanical').value.trim(),
+    safetyNotes: document.getElementById('aud_note_safety').value.trim(),
+    otherNotes: document.getElementById('aud_other').value.trim()
+  };
+  if (!payload.dateAudited) {
+    toast('Choose an inspection date');
+    return;
+  }
+  var input = document.getElementById('ph_file');
+  var files = [];
+  if (input && input.files) {
+    for (var fi = 0; fi < input.files.length; fi++) files.push(input.files[fi]);
+  }
+
+  function finalizeAfterSubmit(savedId) {
+    document.getElementById('ph_file').value = '';
+    _lastAuditId = null;
+    loadAuditPhotos(savedId);
+    loadAuditHistory(_auditAsset.assetNumber);
+    var assetNum = _auditAsset.assetNumber;
+    google.script.run
+      .withSuccessHandler(function (ai) {
+        if (ai && ai.ok && ai.summary) openAiSummaryModal(ai.summary);
+        else if (ai && ai.ok && ai.skipped && ai.message) toast(ai.message);
+        else if (ai && ai.ok && !ai.summary)
+          toast('AI review finished but returned no text. Check EC_AiInspectionReviews and Executions.');
+        else if (ai && !ai.ok && ai.error) toast('AI review failed: ' + ai.error);
+      })
+      .withFailureHandler(function (e) {
+        toast('AI review failed: ' + (e && e.message ? e.message : String(e)));
+      })
+      .apiRunInspectionAiAnalysis({ assetNumber: assetNum, triggerAuditId: savedId });
+    document.getElementById('aud_condition').value = 'Pass';
+    document.getElementById('aud_housekeeping').value = 'Pass';
+    document.getElementById('aud_mechanical').value = 'Pass';
+    document.getElementById('aud_safety').value = 'Pass';
+    document.getElementById('aud_documents').value = 'Pass';
+    document.getElementById('aud_note_condition').value = '';
+    document.getElementById('aud_note_mechanical').value = '';
+    document.getElementById('aud_note_safety').value = '';
+    document.getElementById('aud_other').value = '';
+    document.getElementById('aud_date').value = todayIsoDate();
+    updateAuditNoteVisibility();
+    var eqSel = document.getElementById('ins_equipment_type');
+    if (eqSel) eqSel.value = '';
+    toast(files.length ? 'Submitted (inspection and photos saved)' : 'Submitted');
+  }
+
+  function runSave(metas) {
+    toast('Saving…');
+    google.script.run
+      .withSuccessHandler(function (res) {
+        if (!res || !res.ok) {
+          toast(res && res.error ? res.error : 'Submit failed');
+          return;
+        }
+        var savedId = res.auditId;
+        if (!files.length) {
+          finalizeAfterSubmit(savedId);
+          return;
+        }
+        toast('Uploading photos…');
+        uploadPhotosWithAuditId(files, 0, metas, savedId, function () {
+          finalizeAfterSubmit(savedId);
+        });
+      })
+      .withFailureHandler(function (e) {
+        toast(String(e));
+      })
+      .apiSaveAudit(payload);
+  }
+
+  if (files.length) {
+    buildPhotoMetasWithWarnings(files, function (metas) {
+      runSave(metas);
+    });
+  } else {
+    runSave([]);
+  }
+}
+
+function boot() {
+  var logo = document.getElementById('topbar-logo-img');
+  if (logo) {
+    var src = String(logo.getAttribute('src') || '').trim();
+    if (!src || src === 'null' || src === 'undefined') {
+      logo.style.display = 'none';
+      var div = logo.parentElement && logo.parentElement.querySelector('.topbar-divider');
+      if (div) div.style.display = 'none';
+    }
+  }
+  if (_pageMode === 'audit') {
+    bootAuditStandalone_();
+    return;
+  }
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        document.getElementById('gate').classList.remove('hidden');
+        document.getElementById('gateMsg').textContent = (r && r.error) || 'Could not load';
+        return;
+      }
+      _canManageAssets = !!r.canManageAssets;
+      _canManageUsers = !!r.canManageUsers;
+      _webAppUrl = String(r.webAppUrl || '').trim();
+      var role = r.user && r.user.role ? ' · ' + r.user.role : '';
+      var ut = r.user && r.user.userType ? ' · ' + r.user.userType : '';
+      document.getElementById('userBar').textContent = (r.email || '') + role + ut;
+      if (r.needsRegistration) {
+        document.getElementById('gate').classList.remove('hidden');
+        document.getElementById('gateMsg').textContent =
+          'Your account is not registered in Asset Management (or is inactive).';
+        return;
+      }
+      document.getElementById('app').classList.remove('hidden');
+      var btn = document.getElementById('btnAddAsset');
+      if (btn && _canManageAssets) {
+        btn.classList.remove('hidden');
+        btn.onclick = openAddAssetModal;
+      }
+      var btnUsers = document.getElementById('btnManageUsers');
+      if (_canManageUsers && btnUsers) {
+        btnUsers.classList.remove('hidden');
+        btnUsers.onclick = openUsersModal;
+      }
+      var intro = document.getElementById('assetsIntro');
+      if (!_canManageAssets && intro) {
+        intro.textContent =
+          'Open EquipCare AI from a row to record an inspection or review past results. Ask a Manager or Admin to add missing equipment.';
+      }
+      var tabAssets = document.getElementById('tabAssets');
+      var tabInsp = document.getElementById('tabInspection');
+      if (tabAssets) {
+        tabAssets.onclick = function () {
+          setMainTab_('assets');
+        };
+      }
+      if (tabInsp) {
+        tabInsp.onclick = function () {
+          if (_auditAsset) setMainTab_('inspection');
+        };
+      }
+      var assetsView = document.getElementById('assetsView');
+      if (assetsView) {
+        assetsView.addEventListener('click', function (e) {
+          var actionBtn = e.target.closest('[data-action]');
+          if (!actionBtn || !document.getElementById('assetList').contains(actionBtn)) return;
+          e.preventDefault();
+          var action = actionBtn.getAttribute('data-action');
+          if (action === 'audit') {
+            var enc = actionBtn.getAttribute('data-asset');
+            if (!enc) return;
+            openUrlInNewTab_(assetDeepLink_(decodeURIComponent(enc)));
+            return;
+          }
+          if (action === 'assign') {
+            var assignAsset = findAssetFromActionBtn_(actionBtn);
+            var assignId =
+              (assignAsset && assignAsset.assetId != null ? String(assignAsset.assetId) : '') ||
+              String(actionBtn.getAttribute('data-asset-id') || '').trim();
+            if (!assignId) {
+              toast('Asset ID is required to assign');
+              return;
+            }
+            openUrlInNewTab_(assignDeepLink_(assignId));
+            return;
+          }
+          if (action === 'edit') {
+            var asset = findAssetFromActionBtn_(actionBtn);
+            if (!asset) {
+              toast('Asset not found — refresh the list');
+              return;
+            }
+            openAssetModal(asset);
+            return;
+          }
+          if (action === 'delete') {
+            confirmDeleteAsset_(actionBtn);
+            return;
+          }
+          if (action === 'qr') {
+            var qrAsset = findAssetFromActionBtn_(actionBtn);
+            var qrNum =
+              (qrAsset && qrAsset.assetNumber) ||
+              (actionBtn.getAttribute('data-asset')
+                ? decodeURIComponent(actionBtn.getAttribute('data-asset'))
+                : '');
+            if (!qrNum) {
+              toast('Asset Number is required for a QR code');
+              return;
+            }
+            openAssetQrModal_(qrAsset || { assetNumber: qrNum });
+          }
+        });
+      }
+      initAssetSearchOnce();
+      loadAssets();
+    })
+    .withFailureHandler(function (e) {
+      document.getElementById('gate').classList.remove('hidden');
+      document.getElementById('gateMsg').textContent = String(e);
+    })
+    .apiBootstrap();
+}
+
+function bootAuditStandalone_() {
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        document.getElementById('gate').classList.remove('hidden');
+        document.getElementById('gateMsg').textContent = (r && r.error) || 'Could not load';
+        return;
+      }
+      _canManageAssets = !!r.canManageAssets;
+      _canManageUsers = !!r.canManageUsers;
+      _webAppUrl = String(r.webAppUrl || '').trim();
+      var role = r.user && r.user.role ? ' · ' + r.user.role : '';
+      var ut = r.user && r.user.userType ? ' · ' + r.user.userType : '';
+      var bar = document.getElementById('userBar');
+      if (bar) bar.textContent = (r.email || '') + role + ut;
+      if (r.needsRegistration) {
+        document.getElementById('gate').classList.remove('hidden');
+        document.getElementById('gateMsg').textContent =
+          'Your account is not registered in Asset Management (or is inactive).';
+        return;
+      }
+      document.getElementById('app').classList.remove('hidden');
+      var num = String(_pendingBootAsset || '').trim();
+      if (!num) {
+        document.getElementById('auditAssetTitle').textContent = 'EquipCare AI';
+        document.getElementById('auditAssetMeta').textContent = 'Missing asset in the URL.';
+        toast('Missing asset in the URL');
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function (ar) {
+          if (!ar || !ar.ok) {
+            document.getElementById('auditAssetMeta').textContent =
+              (ar && ar.error) || 'Failed to load assets';
+            toast((ar && ar.error) || 'Failed to load assets');
+            return;
+          }
+          var rows = ar.assets || [];
+          _assetListRows = rows;
+          _assetsByNumber = {};
+          _assetsById = {};
+          rows.forEach(function (a) {
+            if (a && a.assetNumber) _assetsByNumber[String(a.assetNumber)] = a;
+            if (a && a.assetId != null && a.assetId !== '') _assetsById[String(a.assetId)] = a;
+          });
+          if (!_assetsByNumber[num]) {
+            document.getElementById('auditAssetTitle').textContent = 'EquipCare AI';
+            document.getElementById('auditAssetMeta').textContent =
+              'Asset “' + num + '” was not found.';
+            toast('Asset “' + num + '” not found');
+            return;
+          }
+          _pendingBootAsset = '';
+          openAuditView(num);
+        })
+        .withFailureHandler(function (e) {
+          document.getElementById('auditAssetMeta').textContent = String(e);
+          toast(String(e));
+        })
+        .apiListAssets();
+    })
+    .withFailureHandler(function (e) {
+      document.getElementById('gate').classList.remove('hidden');
+      document.getElementById('gateMsg').textContent = String(e);
+    })
+    .apiBootstrap();
+}
+
+function loadAssets() {
+  google.script.run
+    .withSuccessHandler(function (r) {
+      var el = document.getElementById('assetList');
+      var searchInp = document.getElementById('assetSearch');
+      if (!r || !r.ok) {
+        _assetListRows = [];
+        setAssetSearchVisible(false);
+        if (searchInp) searchInp.value = '';
+        var errMsg = (r && r.error) || (r && r.message) || 'Failed to load assets';
+        el.innerHTML = '<p class="muted">' + escapeHtml(errMsg) + '</p>';
+        return;
+      }
+      var rows = r.assets || [];
+      _assetListRows = rows;
+      _assetsByNumber = {};
+      _assetsById = {};
+      rows.forEach(function (a) {
+        if (a.assetNumber) _assetsByNumber[a.assetNumber] = a;
+        if (a.assetId != null && a.assetId !== '') _assetsById[String(a.assetId)] = a;
+      });
+      if (!rows.length) {
+        setAssetSearchVisible(false);
+        if (searchInp) searchInp.value = '';
+        el.innerHTML =
+          '<p class="muted">' +
+          (_canManageAssets
+            ? 'No assets yet. Click “Add asset” to register equipment (asset number and description are required).'
+            : 'No assets are listed yet. Contact a Manager or Admin to add equipment.') +
+          '</p>';
+        return;
+      }
+      setAssetSearchVisible(true);
+      if (searchInp) searchInp.value = '';
+      initAssetGridToolbarOnce_();
+      if (typeof loadAssetViewsThen_ === 'function') {
+        loadAssetViewsThen_(function () {
+          tryOpenBootAsset_();
+        });
+      } else {
+        applyAssetFilter();
+        tryOpenBootAsset_();
+      }
+    })
+    .withFailureHandler(function (e) {
+      _assetListRows = [];
+      setAssetSearchVisible(false);
+      var searchInp = document.getElementById('assetSearch');
+      if (searchInp) searchInp.value = '';
+      document.getElementById('assetList').innerHTML = '<p class="muted">' + escapeHtml(String(e)) + '</p>';
+    })
+    .apiListAssets();
+}
+
+function tryOpenBootAsset_() {
+  var num = String(_pendingBootAsset || '').trim();
+  if (!num) return;
+  _pendingBootAsset = '';
+  if (_assetsByNumber[num]) {
+    openAuditView(num);
+  } else {
+    toast('Asset “' + num + '” not found');
+  }
+}
+
+function openAssetQrModal_(asset) {
+  asset = asset || {};
+  var num = String(asset.assetNumber || '').trim();
+  if (!num) {
+    toast('Asset Number is required for a QR code');
+    return;
+  }
+  var link = assetDeepLink_(num);
+  var desc = String(asset.description || '').trim();
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="qrAssetOv">' +
+    '<div class="modal modal-qr" role="dialog" aria-modal="true">' +
+    '<div class="qr-print-sheet">' +
+    '<h3 class="qr-print-title">Asset QR</h3>' +
+    '<div id="qrAssetCode" class="qr-code-host"></div>' +
+    '<div class="qr-asset-number"></div>' +
+    (desc ? '<div class="qr-asset-desc muted small"></div>' : '') +
+    '<p class="muted small qr-link-note no-print">Scan to open the EquipCare AI inspection page for this asset.</p>' +
+    '<p class="muted small qr-link-url no-print"></p>' +
+    '</div>' +
+    '<div class="form-actions no-print">' +
+    '<button type="button" class="btn btn-primary" id="qrAssetPrint">Print</button>' +
+    '<button type="button" class="btn btn-ghost" id="qrAssetCopy">Copy link</button>' +
+    '<button type="button" class="btn btn-ghost" id="qrAssetClose">Close</button>' +
+    '</div></div></div>';
+  root.querySelector('.qr-asset-number').textContent = num;
+  var descEl = root.querySelector('.qr-asset-desc');
+  if (descEl) descEl.textContent = desc;
+  root.querySelector('.qr-link-url').textContent = link;
+
+  var host = document.getElementById('qrAssetCode');
+  if (typeof QRCode === 'undefined') {
+    host.innerHTML = '<p class="muted small">QR library failed to load. Copy the link instead.</p>';
+  } else {
+    try {
+      new QRCode(host, {
+        text: link,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    } catch (err) {
+      host.innerHTML = '<p class="muted small">' + escapeHtml(String(err)) + '</p>';
+    }
+  }
+
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('qrAssetClose').onclick = close;
+  document.getElementById('qrAssetOv').onclick = function (e) {
+    if (e.target.id === 'qrAssetOv') close();
+  };
+  document.getElementById('qrAssetPrint').onclick = function () {
+    window.print();
+  };
+  document.getElementById('qrAssetCopy').onclick = function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(
+        function () {
+          toast('Link copied');
+        },
+        function () {
+          toast(link);
+        }
+      );
+    } else {
+      toast(link);
+    }
+  };
+}
+
+function confirmDeleteAsset_(btn) {
+  var asset = findAssetFromActionBtn_(btn);
+  var label =
+    (asset && asset.assetNumber) ||
+    (btn.getAttribute('data-asset') ? decodeURIComponent(btn.getAttribute('data-asset')) : '') ||
+    (btn.getAttribute('data-asset-id') ? 'ID ' + btn.getAttribute('data-asset-id') : 'this asset');
+  var payload = {};
+  if (asset && asset.assetId != null && asset.assetId !== '') payload.assetId = asset.assetId;
+  else if (btn.getAttribute('data-asset-id')) payload.assetId = btn.getAttribute('data-asset-id');
+  if (asset && asset.assetNumber) payload.assetNumber = asset.assetNumber;
+  else if (btn.getAttribute('data-asset')) payload.assetNumber = decodeURIComponent(btn.getAttribute('data-asset'));
+
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="delAssetOv">' +
+    '<div class="modal modal-confirm" role="dialog" aria-modal="true" aria-labelledby="delAssetTitle">' +
+    '<h3 id="delAssetTitle">Delete asset?</h3>' +
+    '<p class="modal-confirm-lead">You are about to delete <strong></strong>.</p>' +
+    '<p class="muted small">Related purchase and assignment rows for this Asset ID will also be removed. This cannot be undone.</p>' +
+    '<div class="form-actions">' +
+    '<button type="button" class="btn btn-danger" id="delAssetConfirm">Delete</button>' +
+    '<button type="button" class="btn btn-ghost" id="delAssetCancel">Cancel</button>' +
+    '</div></div></div>';
+  root.querySelector('.modal-confirm-lead strong').textContent = label;
+
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('delAssetCancel').onclick = close;
+  document.getElementById('delAssetOv').onclick = function (e) {
+    if (e.target.id === 'delAssetOv') close();
+  };
+  document.getElementById('delAssetConfirm').onclick = function () {
+    var confirmBtn = document.getElementById('delAssetConfirm');
+    var cancelBtn = document.getElementById('delAssetCancel');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting…';
+    }
+    if (cancelBtn) cancelBtn.disabled = true;
+    google.script.run
+      .withSuccessHandler(function (res) {
+        close();
+        if (!res || !res.ok) {
+          toast(res && res.error ? res.error : 'Delete failed');
+          return;
+        }
+        toast('Asset deleted');
+        loadAssets();
+      })
+      .withFailureHandler(function (e) {
+        close();
+        toast(String(e));
+      })
+      .apiDeleteAsset(payload);
+  };
+}
+
+function openAddAssetModal() {
+  openAssetModal(null);
+}
+
+function openAssetModal(asset) {
+  var editing = !!(asset && (asset.assetId != null || asset.assetNumber));
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="assetOv">' +
+    '<div class="modal"><h3>' +
+    (editing ? 'Edit asset' : 'Add asset') +
+    '</h3>' +
+    '<div class="form-row"><label for="a_num">Asset number *</label><input id="a_num" type="text" placeholder="Unique ID" /></div>' +
+    '<div class="form-row"><label for="a_desc">Description *</label><textarea id="a_desc" rows="2" placeholder="What is this asset?"></textarea></div>' +
+    '<div class="form-row two"><div><label for="a_cat">Category</label><input id="a_cat" type="text" placeholder="Equipment, Tool…" /></div>' +
+    '<div><label for="a_sub">Sub category</label><input id="a_sub" type="text" /></div></div>' +
+    '<div class="form-row two"><div><label for="a_status">Status</label><input id="a_status" type="text" placeholder="Active" value="Active" /></div>' +
+    '<div><label for="a_cap">Capital tool #</label><input id="a_cap" type="text" /></div></div>' +
+    '<div class="form-row two"><div><label for="a_make">Make</label><input id="a_make" type="text" /></div>' +
+    '<div><label for="a_model">Model</label><input id="a_model" type="text" /></div></div>' +
+    '<div class="form-row two"><div><label for="a_year">Year</label><input id="a_year" type="text" /></div>' +
+    '<div><label for="a_plate">License plate</label><input id="a_plate" type="text" /></div></div>' +
+    '<div class="form-row two"><div><label for="a_vin">VIN / serial</label><input id="a_vin" type="text" /></div>' +
+    '<div><label for="a_licensed">Licensed?</label><input id="a_licensed" type="text" placeholder="Yes / No" /></div></div>' +
+    '<div class="form-row two"><div><label for="a_pm_days">Max PM interval days</label><input id="a_pm_days" type="text" /></div>' +
+    '<div><label for="a_pm_hours">Max PM hours/mileage</label><input id="a_pm_hours" type="text" /></div></div>' +
+    '<div class="form-row"><label for="a_notes">Notes</label><textarea id="a_notes" rows="2"></textarea></div>' +
+    '<div class="form-actions"><button type="button" class="btn btn-primary" id="a_save">Save</button>' +
+    '<button type="button" class="btn btn-ghost" id="a_cancel">Cancel</button></div></div></div>';
+
+  if (editing) {
+    document.getElementById('a_num').value = asset.assetNumber || '';
+    document.getElementById('a_desc').value = asset.description || '';
+    document.getElementById('a_cat').value = asset.category || asset.assetType || '';
+    document.getElementById('a_sub').value = asset.subCategory || '';
+    document.getElementById('a_status').value = asset.status || 'Active';
+    document.getElementById('a_cap').value = asset.capitalToolNumber || '';
+    document.getElementById('a_make').value = asset.make || '';
+    document.getElementById('a_model').value = asset.model || '';
+    document.getElementById('a_year').value = asset.year != null ? String(asset.year) : '';
+    document.getElementById('a_plate').value = asset.plateNumber || '';
+    document.getElementById('a_vin').value = asset.vinSerial || '';
+    document.getElementById('a_licensed').value = asset.licensed || '';
+    document.getElementById('a_pm_days').value = asset.maxPmIntervalDays || '';
+    document.getElementById('a_pm_hours').value = asset.maxPmHoursMileage || '';
+    document.getElementById('a_notes').value = asset.notes || '';
+  }
+
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('a_cancel').onclick = close;
+  document.getElementById('assetOv').onclick = function (e) {
+    if (e.target.id === 'assetOv') close();
+  };
+  document.getElementById('a_save').onclick = function () {
+    var num = document.getElementById('a_num').value.trim();
+    var desc = document.getElementById('a_desc').value.trim();
+    if (!num || !desc) {
+      toast('Asset number and description are required');
+      return;
+    }
+    var payload = {
+      assetNumber: num,
+      description: desc,
+      category: document.getElementById('a_cat').value.trim(),
+      subCategory: document.getElementById('a_sub').value.trim(),
+      status: document.getElementById('a_status').value.trim() || 'Active',
+      capitalToolNumber: document.getElementById('a_cap').value.trim(),
+      make: document.getElementById('a_make').value.trim(),
+      model: document.getElementById('a_model').value.trim(),
+      year: document.getElementById('a_year').value.trim(),
+      vinSerial: document.getElementById('a_vin').value.trim(),
+      plateNumber: document.getElementById('a_plate').value.trim(),
+      licensed: document.getElementById('a_licensed').value.trim(),
+      maxPmIntervalDays: document.getElementById('a_pm_days').value.trim(),
+      maxPmHoursMileage: document.getElementById('a_pm_hours').value.trim(),
+      notes: document.getElementById('a_notes').value.trim(),
+      assetType: document.getElementById('a_cat').value.trim()
+    };
+    if (editing && asset.assetId != null && asset.assetId !== '') payload.assetId = asset.assetId;
+    google.script.run
+      .withSuccessHandler(function (res) {
+        if (!res || !res.ok) {
+          toast(res && res.error ? res.error : 'Save failed');
+          return;
+        }
+        toast(editing ? 'Asset updated' : 'Asset saved');
+        close();
+        loadAssets();
+      })
+      .withFailureHandler(function (e) {
+        toast(String(e));
+      })
+      .apiSaveAsset(payload);
+  };
+}
+
+function openUsersModal() {
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="usersOv">' +
+    '<div class="modal modal-wide"><h3>Users</h3>' +
+    '<p class="muted small">Internal = Velox staff. External = Usage Agreement assignees (portal in a later phase).</p>' +
+    '<div id="usersList" class="muted small">Loading…</div>' +
+    '<h3 class="subh" style="margin-top:16px">Add / update user</h3>' +
+    '<div class="form-row"><label for="u_email">Email *</label><input id="u_email" type="email" placeholder="name@company.com" /></div>' +
+    '<div class="form-row two"><div><label for="u_name">Display name</label><input id="u_name" type="text" /></div>' +
+    '<div><label for="u_role">Role</label><select id="u_role"><option value="Field">Field</option><option value="Manager">Manager</option><option value="Admin">Admin</option></select></div></div>' +
+    '<div class="form-row two"><div><label for="u_type">User type</label><select id="u_type"><option value="Internal">Internal</option><option value="External">External</option></select></div>' +
+    '<div><label for="u_active">Active</label><select id="u_active"><option value="Yes">Yes</option><option value="No">No</option></select></div></div>' +
+    '<div class="form-actions"><button type="button" class="btn btn-primary" id="u_save">Save user</button>' +
+    '<button type="button" class="btn btn-ghost" id="u_close">Close</button></div></div></div>';
+
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('u_close').onclick = close;
+  document.getElementById('usersOv').onclick = function (e) {
+    if (e.target.id === 'usersOv') close();
+  };
+
+  function renderUsers(users) {
+    var el = document.getElementById('usersList');
+    if (!el) return;
+    if (!users || !users.length) {
+      el.innerHTML = '<p class="muted small" style="margin:0">No users yet.</p>';
+      return;
+    }
+    el.innerHTML =
+      '<div class="audit-history" style="max-height:220px">' +
+      users
+        .map(function (u) {
+          return (
+            '<div class="audit-past-row" style="cursor:pointer" data-email="' +
+            escapeAttr(u.email) +
+            '" data-role="' +
+            escapeAttr(u.role || 'Field') +
+            '" data-name="' +
+            escapeAttr(u.displayName || '') +
+            '" data-type="' +
+            escapeAttr(u.userType || 'Internal') +
+            '" data-active="' +
+            (u.active ? 'Yes' : 'No') +
+            '">' +
+            '<div class="audit-past-main"><div class="audit-past-date">' +
+            escapeHtml(u.email) +
+            '</div><div class="audit-past-meta">' +
+            escapeHtml(u.displayName || '') +
+            ' · ' +
+            escapeHtml(u.role || '') +
+            ' · ' +
+            escapeHtml(u.userType || 'Internal') +
+            ' · ' +
+            (u.active ? 'Active' : 'Inactive') +
+            '</div></div></div>'
+          );
+        })
+        .join('') +
+      '</div>';
+    el.querySelectorAll('.audit-past-row').forEach(function (row) {
+      row.onclick = function () {
+        document.getElementById('u_email').value = row.getAttribute('data-email') || '';
+        document.getElementById('u_name').value = row.getAttribute('data-name') || '';
+        document.getElementById('u_role').value = row.getAttribute('data-role') || 'Field';
+        document.getElementById('u_type').value = row.getAttribute('data-type') || 'Internal';
+        document.getElementById('u_active').value = row.getAttribute('data-active') || 'Yes';
+      };
+    });
+  }
+
+  function reload() {
+    google.script.run
+      .withSuccessHandler(function (r) {
+        if (!r || !r.ok) {
+          document.getElementById('usersList').textContent = (r && r.error) || 'Failed to load users';
+          return;
+        }
+        renderUsers(r.users || []);
+      })
+      .withFailureHandler(function (e) {
+        document.getElementById('usersList').textContent = String(e);
+      })
+      .apiListUsers();
+  }
+
+  document.getElementById('u_save').onclick = function () {
+    var email = document.getElementById('u_email').value.trim();
+    if (!email) {
+      toast('Email is required');
+      return;
+    }
+    var payload = {
+      email: email,
+      displayName: document.getElementById('u_name').value.trim() || email,
+      role: document.getElementById('u_role').value,
+      userType: document.getElementById('u_type').value,
+      active: document.getElementById('u_active').value === 'Yes'
+    };
+    google.script.run
+      .withSuccessHandler(function (res) {
+        if (!res || !res.ok) {
+          toast(res && res.error ? res.error : 'Save failed');
+          return;
+        }
+        toast('User saved');
+        reload();
+      })
+      .withFailureHandler(function (e) {
+        toast(String(e));
+      })
+      .apiSaveUser(payload);
+  };
+
+  reload();
+}
+
+boot();
+</script>

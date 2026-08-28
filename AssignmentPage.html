@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Assign Asset</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <?!= include('Styles'); ?>
+    <style>
+      .assign-page-grid {
+        display: grid;
+        gap: 1rem;
+      }
+      @media (min-width: 960px) {
+        .assign-page-grid {
+          grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+          align-items: start;
+        }
+      }
+      .assign-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 0.65rem 1rem;
+      }
+      .assign-summary-item dt {
+        margin: 0;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .assign-summary-item dd {
+        margin: 0.15rem 0 0;
+        font-size: 0.9rem;
+        color: var(--text);
+        word-break: break-word;
+      }
+      .assign-status {
+        margin: 0 0 0.85rem;
+        font-size: 0.85rem;
+      }
+      .assign-status.error {
+        color: #b42318;
+      }
+      .assign-status.ok {
+        color: #027a48;
+      }
+      .assign-history-wrap {
+        overflow-x: auto;
+      }
+      .assign-history-wrap table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8125rem;
+      }
+      .assign-history-wrap th,
+      .assign-history-wrap td {
+        text-align: left;
+        padding: 0.4rem 0.5rem;
+        border-bottom: 1px solid var(--border-subtle);
+        vertical-align: top;
+      }
+      .assign-history-wrap th {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      var _bootAssetId = __INITIAL_ASSET_ID_JSON__;
+    </script>
+    <header class="topbar">
+      <div class="topbar-branding">
+        <div class="topbar-app-identity">
+          <img
+            id="topbar-logo-img"
+            class="topbar-logo"
+            src="__HEADER_LOGO_URL__"
+            alt="Velox"
+          />
+          <span class="topbar-divider" aria-hidden="true">|</span>
+          <h1 class="topbar-title">Assign Asset</h1>
+        </div>
+      </div>
+      <div id="userBar" class="user-bar"></div>
+    </header>
+
+    <main class="wrap">
+      <div id="gate" class="card hidden">
+        <h2>Access</h2>
+        <p id="gateMsg" class="muted"></p>
+      </div>
+
+      <div id="app" class="hidden">
+        <p class="muted small" style="margin: 0 0 0.75rem">
+          Assign an employee, project, and location. Saving end-dates the prior assignment and starts a new history row.
+        </p>
+        <div class="assign-page-grid">
+          <section class="card">
+            <h2 style="margin-top: 0; font-size: 1.05rem">Asset</h2>
+            <div id="assignAssetSummary" class="muted small">Loading asset…</div>
+            <hr style="border: none; border-top: 1px solid var(--border-subtle); margin: 1rem 0" />
+            <h3 style="margin: 0 0 0.65rem; font-size: 0.95rem">Current assignment</h3>
+            <div id="assignCurrent" class="muted small">—</div>
+          </section>
+
+          <section class="card">
+            <h2 style="margin-top: 0; font-size: 1.05rem">New assignment</h2>
+            <p id="assignStatus" class="assign-status muted" aria-live="polite"></p>
+            <form id="assignForm" autocomplete="off">
+              <div class="form-row">
+                <label for="asg_employee">Assignee</label>
+                <select id="asg_employee" required>
+                  <option value="">Select employee…</option>
+                </select>
+              </div>
+              <div class="form-row two">
+                <div>
+                  <label for="asg_project">Project</label>
+                  <input id="asg_project" type="text" maxlength="200" placeholder="Project name or number" />
+                </div>
+                <div>
+                  <label for="asg_location">Location</label>
+                  <input id="asg_location" type="text" maxlength="200" placeholder="Yard, job site, office…" />
+                </div>
+              </div>
+              <div class="form-row">
+                <label for="asg_outside">Outside of project area</label>
+                <select id="asg_outside">
+                  <option value="">—</option>
+                  <option value="No">No</option>
+                  <option value="Yes">Yes</option>
+                </select>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary" id="asg_save">Save assignment</button>
+                <button type="button" class="btn btn-ghost" id="asg_close">Close tab</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <section class="card" style="margin-top: 1rem">
+          <h2 style="margin-top: 0; font-size: 1.05rem">Assignment history</h2>
+          <div id="assignHistory" class="muted small">Loading…</div>
+        </section>
+      </div>
+    </main>
+
+    <div id="toast-root"></div>
+
+    <script>
+      var _assetId = String(_bootAssetId || '').trim();
+      var _canManageAssets = false;
+      var _detail = null;
+
+      function toast(msg) {
+        var root = document.getElementById('toast-root');
+        if (!root) return;
+        var el = document.createElement('div');
+        el.className = 'toast';
+        el.textContent = String(msg || '');
+        root.appendChild(el);
+        setTimeout(function () {
+          el.remove();
+        }, 3200);
+      }
+
+      function escapeHtml(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function escapeAttr(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      function dash_(v) {
+        var s = String(v == null ? '' : v).trim();
+        return s ? escapeHtml(s) : '—';
+      }
+
+      function setStatus_(msg, kind) {
+        var el = document.getElementById('assignStatus');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.className = 'assign-status' + (kind ? ' ' + kind : ' muted');
+      }
+
+      function renderSummary_(asset) {
+        var el = document.getElementById('assignAssetSummary');
+        if (!el) return;
+        if (!asset) {
+          el.textContent = 'Asset not found.';
+          return;
+        }
+        var items = [
+          ['Asset Number', asset.assetNumber],
+          ['Description', asset.description],
+          ['Status', asset.status],
+          ['Category', asset.category || asset.assetType],
+          ['Make', asset.make],
+          ['Model', asset.model],
+          ['Year', asset.year],
+          ['Serial / VIN', asset.vinSerial || asset.serialNumberVin]
+        ];
+        el.innerHTML =
+          '<dl class="assign-summary-grid">' +
+          items
+            .map(function (pair) {
+              return (
+                '<div class="assign-summary-item"><dt>' +
+                escapeHtml(pair[0]) +
+                '</dt><dd>' +
+                dash_(pair[1]) +
+                '</dd></div>'
+              );
+            })
+            .join('') +
+          '</dl>';
+      }
+
+      function renderCurrent_(assignment) {
+        var el = document.getElementById('assignCurrent');
+        if (!el) return;
+        if (!assignment || !(assignment.employee || assignment.location || assignment.project)) {
+          el.innerHTML = '<p class="muted small" style="margin:0">No current assignment.</p>';
+          return;
+        }
+        el.innerHTML =
+          '<dl class="assign-summary-grid">' +
+          [
+            ['Assignee', assignment.employee],
+            ['Project', assignment.project],
+            ['Location', assignment.location],
+            ['Assigned', assignment.assignedDate],
+            ['Outside project area', assignment.outsideOfProjectArea],
+            ['Assigned ID', assignment.lastAssignedId]
+          ]
+            .map(function (pair) {
+              return (
+                '<div class="assign-summary-item"><dt>' +
+                escapeHtml(pair[0]) +
+                '</dt><dd>' +
+                dash_(pair[1]) +
+                '</dd></div>'
+              );
+            })
+            .join('') +
+          '</dl>';
+      }
+
+      function renderHistory_(rows) {
+        var el = document.getElementById('assignHistory');
+        if (!el) return;
+        rows = rows || [];
+        if (!rows.length) {
+          el.innerHTML = '<p class="muted small" style="margin:0">No historical assignments yet.</p>';
+          return;
+        }
+        el.innerHTML =
+          '<div class="assign-history-wrap"><table><thead><tr>' +
+          '<th>Start</th><th>End</th><th>Employee</th><th>Location</th><th>Project</th><th>Outside</th><th>Assigned ID</th>' +
+          '</tr></thead><tbody>' +
+          rows
+            .map(function (h) {
+              return (
+                '<tr><td>' +
+                dash_(h.startAssignedDate) +
+                '</td><td>' +
+                dash_(h.endAssignedDate) +
+                '</td><td>' +
+                dash_(h.employee) +
+                '</td><td>' +
+                dash_(h.location) +
+                '</td><td>' +
+                dash_(h.project) +
+                '</td><td>' +
+                dash_(h.outsideOfProjectArea) +
+                '</td><td>' +
+                dash_(h.assignedId) +
+                '</td></tr>'
+              );
+            })
+            .join('') +
+          '</tbody></table></div>';
+      }
+
+      function fillEmployees_(employees, selected) {
+        var sel = document.getElementById('asg_employee');
+        if (!sel) return;
+        var list = employees || [];
+        var opts = ['<option value="">Select employee…</option>'];
+        list.forEach(function (name) {
+          var n = String(name || '').trim();
+          if (!n) return;
+          opts.push(
+            '<option value="' +
+              escapeAttr(n) +
+              '"' +
+              (selected && selected === n ? ' selected' : '') +
+              '>' +
+              escapeHtml(n) +
+              '</option>'
+          );
+        });
+        if (selected && list.indexOf(selected) < 0) {
+          opts.push(
+            '<option value="' +
+              escapeAttr(selected) +
+              '" selected>' +
+              escapeHtml(selected) +
+              ' (current)</option>'
+          );
+        }
+        sel.innerHTML = opts.join('');
+      }
+
+      function prefillForm_(assignment) {
+        var a = assignment || {};
+        document.getElementById('asg_project').value = a.project || '';
+        document.getElementById('asg_location').value = a.location || '';
+        var outside = String(a.outsideOfProjectArea || '').trim();
+        var outSel = document.getElementById('asg_outside');
+        if (outside === 'Yes' || outside === 'No') outSel.value = outside;
+        else outSel.value = '';
+      }
+
+      function loadPageData_() {
+        if (!_assetId) {
+          setStatus_('Missing assetId in the URL.', 'error');
+          document.getElementById('assignAssetSummary').textContent = 'No asset selected.';
+          document.getElementById('assignHistory').textContent = '';
+          document.getElementById('asg_save').disabled = true;
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(function (r) {
+            if (!r || !r.ok || !r.detail) {
+              setStatus_((r && r.error) || 'Failed to load asset detail', 'error');
+              document.getElementById('assignAssetSummary').textContent = 'Failed to load asset.';
+              return;
+            }
+            _detail = r.detail;
+            renderSummary_(r.detail.asset);
+            renderCurrent_(r.detail.assignment);
+            prefillForm_(r.detail.assignment);
+            loadEmployees_(r.detail.assignment && r.detail.assignment.employee);
+            loadHistory_();
+          })
+          .withFailureHandler(function (e) {
+            setStatus_(String(e), 'error');
+          })
+          .apiGetAssetDetail({ assetId: _assetId });
+      }
+
+      function loadEmployees_(selected) {
+        google.script.run
+          .withSuccessHandler(function (r) {
+            if (!r || !r.ok) {
+              toast((r && r.error) || 'Failed to load employees');
+              fillEmployees_([], selected);
+              return;
+            }
+            fillEmployees_(r.employees || [], selected || '');
+          })
+          .withFailureHandler(function (e) {
+            toast(String(e));
+            fillEmployees_([], selected);
+          })
+          .apiListActiveEmployees();
+      }
+
+      function loadHistory_() {
+        google.script.run
+          .withSuccessHandler(function (r) {
+            if (!r || !r.ok) {
+              document.getElementById('assignHistory').textContent =
+                (r && r.error) || 'Failed to load history';
+              return;
+            }
+            renderHistory_(r.history || []);
+          })
+          .withFailureHandler(function (e) {
+            document.getElementById('assignHistory').textContent = String(e);
+          })
+          .apiListAssignmentHistory({ assetId: _assetId });
+      }
+
+      function saveAssignment_(ev) {
+        ev.preventDefault();
+        if (!_canManageAssets) {
+          setStatus_('Only Admin or Manager can assign assets.', 'error');
+          return;
+        }
+        var employee = document.getElementById('asg_employee').value.trim();
+        var project = document.getElementById('asg_project').value.trim();
+        var location = document.getElementById('asg_location').value.trim();
+        var outside = document.getElementById('asg_outside').value.trim();
+        if (!employee) {
+          setStatus_('Assignee is required.', 'error');
+          return;
+        }
+        var btn = document.getElementById('asg_save');
+        btn.disabled = true;
+        setStatus_('Saving…', 'muted');
+        google.script.run
+          .withSuccessHandler(function (r) {
+            btn.disabled = false;
+            if (!r || !r.ok) {
+              setStatus_((r && r.error) || 'Save failed', 'error');
+              return;
+            }
+            setStatus_('Assignment saved.', 'ok');
+            toast('Assignment saved');
+            if (r.assignment) {
+              renderCurrent_(r.assignment);
+              prefillForm_(r.assignment);
+              var sel = document.getElementById('asg_employee');
+              if (sel && r.assignment.employee) sel.value = r.assignment.employee;
+            }
+            loadHistory_();
+          })
+          .withFailureHandler(function (e) {
+            btn.disabled = false;
+            setStatus_(String(e), 'error');
+          })
+          .apiReplaceAssignment({
+            assetId: _assetId,
+            employee: employee,
+            project: project,
+            location: location,
+            outsideOfProjectArea: outside
+          });
+      }
+
+      function bootAssignPage_() {
+        google.script.run
+          .withSuccessHandler(function (r) {
+            if (!r || !r.ok) {
+              document.getElementById('gate').classList.remove('hidden');
+              document.getElementById('gateMsg').textContent =
+                (r && r.error) || 'Unable to sign in.';
+              return;
+            }
+            if (r.needsRegistration) {
+              document.getElementById('gate').classList.remove('hidden');
+              document.getElementById('gateMsg').textContent =
+                'Your Google account is not registered for Asset Management.';
+              return;
+            }
+            _canManageAssets = !!r.canManageAssets;
+            var bar = document.getElementById('userBar');
+            if (bar) {
+              bar.textContent =
+                (r.user && r.user.displayName ? r.user.displayName + ' · ' : '') +
+                (r.email || '') +
+                (r.user && r.user.role ? ' · ' + r.user.role : '');
+            }
+            document.getElementById('app').classList.remove('hidden');
+            if (!_canManageAssets) {
+              setStatus_('View only — Admin or Manager required to save.', 'error');
+              document.getElementById('asg_save').disabled = true;
+            }
+            document.getElementById('assignForm').onsubmit = saveAssignment_;
+            document.getElementById('asg_close').onclick = function () {
+              window.close();
+            };
+            loadPageData_();
+          })
+          .withFailureHandler(function (e) {
+            document.getElementById('gate').classList.remove('hidden');
+            document.getElementById('gateMsg').textContent = String(e);
+          })
+          .apiBootstrap();
+      }
+
+      bootAssignPage_();
+    </script>
+  </body>
+</html>

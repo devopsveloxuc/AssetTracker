@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Asset Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous"></script>
+    <?!= include('Styles'); ?>
+    <?!= include('ExifJs'); ?>
+  </head>
+  <body>
+    <script>
+      var _bootAssetNumber = __INITIAL_ASSET_JSON__;
+      var _bootPageMode = __PAGE_MODE_JSON__;
+    </script>
+    <header class="topbar">
+      <div class="topbar-branding">
+        <div class="topbar-app-identity">
+          <img
+            id="topbar-logo-img"
+            class="topbar-logo"
+            src="__HEADER_LOGO_URL__"
+            alt="Velox"
+          />
+          <span class="topbar-divider" aria-hidden="true">|</span>
+          <h1 class="topbar-title">Asset Management</h1>
+        </div>
+      </div>
+      <div id="userBar" class="user-bar"></div>
+    </header>
+
+    <main class="wrap">
+      <div id="gate" class="card hidden">
+        <h2>Access</h2>
+        <p id="gateMsg" class="muted"></p>
+        <p class="muted small">
+          An admin must register your Google email in Asset Management (Users) with role
+          Admin, Manager, or Field. Data is stored via VeloxInternal-API.
+        </p>
+      </div>
+
+      <div id="app" class="hidden">
+        <div class="app-nav-bar">
+          <nav class="top-nav" role="tablist" aria-label="Main views">
+            <button
+              type="button"
+              class="top-nav-btn active"
+              id="tabAssets"
+              data-tab="assets"
+              role="tab"
+              aria-selected="true"
+            >
+              Assets
+            </button>
+            <button
+              type="button"
+              class="top-nav-btn hidden"
+              id="tabInspection"
+              data-tab="inspection"
+              role="tab"
+              aria-selected="false"
+            >
+              EquipCare AI
+            </button>
+          </nav>
+          <div class="nav-actions">
+            <button type="button" class="btn btn-ghost btn-sm hidden" id="btnManageUsers">Users</button>
+            <button type="button" class="btn btn-primary btn-sm hidden" id="btnAddAsset">+ Add asset</button>
+          </div>
+        </div>
+
+        <div id="assetsView">
+          <section class="card">
+            <div class="asset-grid-toolbar" id="assetGridToolbar">
+              <fieldset class="asset-toolbar-group asset-view-group">
+                <legend>Views</legend>
+                <select id="assetViewSelect" title="Saved view"></select>
+                <button type="button" class="btn btn-sm asset-view-add-btn" id="assetViewSaveAs" title="Create view">+</button>
+                <button type="button" class="btn btn-sm" id="assetViewSave" title="Save current view">Save</button>
+                <button type="button" class="btn btn-sm" id="assetViewDelete" title="Delete current view">×</button>
+                <button type="button" class="btn btn-sm" id="assetViewSettings" title="View settings">⚙</button>
+              </fieldset>
+              <fieldset class="asset-toolbar-group asset-filter-group">
+                <legend>Filter</legend>
+                <span class="asset-filter-label">Headers</span>
+                <button type="button" class="btn btn-sm" id="assetFilterClear" title="Clear all header filters">×</button>
+              </fieldset>
+              <fieldset id="assetSearchWrap" class="asset-toolbar-group asset-search-group hidden">
+                <legend>Search</legend>
+                <input
+                  type="search"
+                  id="assetSearch"
+                  placeholder="Search all columns…"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button type="button" class="btn btn-sm" id="assetSearchClear" title="Clear search">Clear</button>
+              </fieldset>
+              <fieldset class="asset-toolbar-group asset-export-group">
+                <legend>Export</legend>
+                <button type="button" class="btn btn-sm" id="assetExcelBtn" title="Export visible columns to Excel">
+                  Excel
+                </button>
+              </fieldset>
+            </div>
+            <div id="assetList" class="asset-list"></div>
+          </section>
+        </div>
+
+        <div id="auditView" class="hidden">
+          <section class="card card-audit">
+            <div class="section-head">
+              <h2 id="auditAssetTitle">EquipCare AI</h2>
+              <button type="button" class="btn btn-ghost btn-sm" id="btnBackAssets">← Assets</button>
+            </div>
+            <p id="auditAssetMeta" class="muted small"></p>
+            <div id="auditHistory" class="audit-history"></div>
+
+            <h3 class="subh">Inspection details</h3>
+            <div class="form-row">
+              <label for="ins_equipment_type">Equipment type *</label>
+              <select id="ins_equipment_type">
+                <option value="">Loading…</option>
+              </select>
+            </div>
+
+            <h3 class="subh">New inspection</h3>
+            <div class="form-row two">
+              <div>
+                <label for="aud_date">Date audited</label>
+                <input type="date" id="aud_date" />
+              </div>
+              <div id="aud_meter_wrap">
+                <label for="aud_meter">Meter reading</label>
+                <input type="number" id="aud_meter" step="0.01" placeholder="Optional" />
+              </div>
+            </div>
+
+            <p class="muted small">Rate each area: Pass, Needs attention, Fail, or N/A.</p>
+            <div class="form-row">
+              <label for="aud_condition">Condition</label>
+              <select id="aud_condition"></select>
+            </div>
+            <div class="form-row aud-note" id="wrap_note_condition" style="display: none">
+              <label for="aud_note_condition">Condition notes</label>
+              <textarea id="aud_note_condition" rows="2"></textarea>
+            </div>
+            <div class="form-row">
+              <label for="aud_housekeeping">Housekeeping</label>
+              <select id="aud_housekeeping"></select>
+            </div>
+            <div class="form-row">
+              <label for="aud_mechanical">Mechanical items</label>
+              <select id="aud_mechanical"></select>
+            </div>
+            <div class="form-row aud-note" id="wrap_note_mechanical" style="display: none">
+              <label for="aud_note_mechanical">Mechanical notes</label>
+              <textarea id="aud_note_mechanical" rows="2"></textarea>
+            </div>
+            <div class="form-row">
+              <label for="aud_safety">Safety items</label>
+              <select id="aud_safety"></select>
+            </div>
+            <div class="form-row aud-note" id="wrap_note_safety" style="display: none">
+              <label for="aud_note_safety">Safety notes</label>
+              <textarea id="aud_note_safety" rows="2"></textarea>
+            </div>
+            <div class="form-row">
+              <label for="aud_documents">Documents</label>
+              <select id="aud_documents"></select>
+            </div>
+            <div class="form-row">
+              <label for="aud_other">Other notes</label>
+              <textarea id="aud_other" rows="2"></textarea>
+            </div>
+
+            <h3 class="subh">Inspection photos</h3>
+            <p class="muted small" id="photoHint">
+              Optional — choose photos from your device (camera or gallery on mobile). They are uploaded when you submit the inspection below.
+            </p>
+            <div id="photoPanel">
+              <p class="muted small" id="ph_metaHint">
+                JPEG photos from most phones include camera date/time and sometimes GPS. If metadata is missing, you’ll see a short warning when you submit.
+              </p>
+              <div class="form-row">
+                <label for="ph_file">Photo(s)</label>
+                <input type="file" id="ph_file" accept="image/*" multiple capture="environment" />
+              </div>
+              <div id="photoThumbs" class="photo-thumbs"></div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary" id="aud_submit">Submit</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <div id="modalRoot"></div>
+    <div id="toast-root"></div>
+
+    <?!= include('ClientJs'); ?>
+    <?!= include('AssetGrid'); ?>
+  </body>
+</html>

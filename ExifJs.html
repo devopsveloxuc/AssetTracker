@@ -1,0 +1,179 @@
+<script>
+(function () {
+  function readU16(view, o, le) {
+    return le ? view.getUint16(o, true) : view.getUint16(o, false);
+  }
+  function readU32(view, o, le) {
+    return le ? view.getUint32(o, true) : view.getUint32(o, false);
+  }
+  function readASCII(view, o, len) {
+    var s = '';
+    for (var i = 0; i < len; i++) {
+      var c = view.getUint8(o + i);
+      if (c === 0) break;
+      s += String.fromCharCode(c);
+    }
+    return s.trim();
+  }
+  function parseRational(view, tiff, o, le) {
+    var num = readU32(view, tiff + o, le);
+    var den = readU32(view, tiff + o + 4, le);
+    if (!den) return 0;
+    return num / den;
+  }
+  function dmsToDeg(deg, min, sec, ref) {
+    var v = deg + min / 60 + sec / 3600;
+    if (ref === 'S' || ref === 'W') v = -v;
+    return v;
+  }
+  function parseIFD(view, tiff, ifdOff, le, depth) {
+    depth = depth || 0;
+    if (depth > 6 || ifdOff < 0 || ifdOff > view.byteLength - 2) return {};
+    var o = tiff + ifdOff;
+    var n = readU16(view, o, le);
+    if (n > 200) return {};
+    var exifPtr = null;
+    var gpsPtr = null;
+    var dateTime = '';
+    for (var i = 0; i < n; i++) {
+      var e = o + 2 + i * 12;
+      if (e + 12 > view.byteLength) break;
+      var tag = readU16(view, e, le);
+      var type = readU16(view, e + 2, le);
+      var cnt = readU32(view, e + 4, le);
+      var valOff = readU32(view, e + 8, le);
+      if (tag === 0x8769) exifPtr = valOff;
+      if (tag === 0x8825) gpsPtr = valOff;
+      if (tag === 0x0132 && type === 2 && cnt <= 32) {
+        var vo = cnt > 4 ? tiff + valOff : e + 8;
+        dateTime = readASCII(view, vo, cnt);
+      }
+    }
+    var out = { dateTimeOriginal: '', lat: null, lng: null };
+    if (dateTime) out.dateTimeOriginal = dateTime;
+    if (!out.dateTimeOriginal && exifPtr != null) {
+      var eo = tiff + exifPtr;
+      var en = readU16(view, eo, le);
+      for (var j = 0; j < en; j++) {
+        var ee = eo + 2 + j * 12;
+        if (ee + 12 > view.byteLength) break;
+        var etag = readU16(view, ee, le);
+        var etype = readU16(view, ee + 2, le);
+        var ecnt = readU32(view, ee + 4, le);
+        var evo = readU32(view, ee + 8, le);
+        if (etag === 0x9003 && etype === 2) {
+          var so = ecnt > 4 ? tiff + evo : ee + 8;
+          out.dateTimeOriginal = readASCII(view, so, ecnt);
+          break;
+        }
+      }
+    }
+    if (gpsPtr != null) {
+      var g = parseGpsIFD(view, tiff, gpsPtr, le);
+      if (g.lat != null) out.lat = g.lat;
+      if (g.lng != null) out.lng = g.lng;
+    }
+    return out;
+  }
+  function parseGpsIFD(view, tiff, ifdOff, le) {
+    var lat = null;
+    var lng = null;
+    var latRef = 'N';
+    var lngRef = 'E';
+    var o = tiff + ifdOff;
+    var n = readU16(view, o, le);
+    var latRat = null;
+    var lngRat = null;
+    for (var i = 0; i < n; i++) {
+      var e = o + 2 + i * 12;
+      if (e + 12 > view.byteLength) break;
+      var tag = readU16(view, e, le);
+      var type = readU16(view, e + 2, le);
+      var cnt = readU32(view, e + 4, le);
+      var valOff = readU32(view, e + 8, le);
+      var dataOff = cnt > 2 && type === 5 ? tiff + valOff : e + 8;
+      if (tag === 1) latRef = readASCII(view, type === 2 ? (cnt > 4 ? tiff + valOff : e + 8) : dataOff, 2) || 'N';
+      if (tag === 3) lngRef = readASCII(view, type === 2 ? (cnt > 4 ? tiff + valOff : e + 8) : dataOff, 2) || 'E';
+      if (tag === 2 && type === 5 && cnt === 3) {
+        latRat = dataOff;
+      }
+      if (tag === 4 && type === 5 && cnt === 3) {
+        lngRat = dataOff;
+      }
+    }
+    if (latRat != null) {
+      var d0 = parseRational(view, tiff, latRat - tiff, le);
+      var d1 = parseRational(view, tiff, latRat - tiff + 8, le);
+      var d2 = parseRational(view, tiff, latRat - tiff + 16, le);
+      lat = dmsToDeg(d0, d1, d2, latRef.charAt(0));
+    }
+    if (lngRat != null) {
+      var g0 = parseRational(view, tiff, lngRat - tiff, le);
+      var g1 = parseRational(view, tiff, lngRat - tiff + 8, le);
+      var g2 = parseRational(view, tiff, lngRat - tiff + 16, le);
+      lng = dmsToDeg(g0, g1, g2, lngRef.charAt(0));
+    }
+    return { lat: lat, lng: lng };
+  }
+  function parseJpegExif(view) {
+    var len = view.byteLength;
+    var o = 0;
+    if (len < 4 || view.getUint8(0) !== 0xff || view.getUint8(1) !== 0xd8) return {};
+    o = 2;
+    while (o + 4 < len) {
+      if (view.getUint8(o) !== 0xff) break;
+      var m = view.getUint8(o + 1);
+      if (m === 0xd9 || m === 0xda) break;
+      var segLen = readU16(view, o + 2, false);
+      if (segLen < 2 || o + 2 + segLen > len) break;
+      if (m === 0xe1) {
+        var segStart = o + 4;
+        if (segStart + 6 > len) break;
+        var sig = '';
+        for (var s = 0; s < 4; s++) sig += String.fromCharCode(view.getUint8(segStart + s));
+        if (sig === 'Exif' && view.getUint8(segStart + 4) === 0 && view.getUint8(segStart + 5) === 0) {
+          var tiff = segStart + 6;
+          if (tiff + 8 > len) break;
+          var le = view.getUint16(tiff) === 0x4949;
+          var fortyTwo = readU16(view, tiff + 2, le);
+          if (fortyTwo !== 0x002a && fortyTwo !== 42) {
+            le = !le;
+            fortyTwo = readU16(view, tiff + 2, le);
+          }
+          if (fortyTwo !== 42) break;
+          var ifd0 = readU32(view, tiff + 4, le);
+          return parseIFD(view, tiff, ifd0, le, 0);
+        }
+      }
+      o += 2 + segLen;
+    }
+    return {};
+  }
+  window.ecExtractExifFromFile = function (file) {
+    return new Promise(function (resolve) {
+      if (!file || !file.size) {
+        resolve({});
+        return;
+      }
+      var fr = new FileReader();
+      fr.onload = function (e) {
+        try {
+          var v = new DataView(e.target.result);
+          var mime = String(file.type || '').toLowerCase();
+          if (mime.indexOf('jpeg') !== -1 || mime.indexOf('jpg') !== -1 || /\.jpe?g$/i.test(file.name)) {
+            resolve(parseJpegExif(v) || {});
+          } else {
+            resolve({ _unsupportedFormat: true });
+          }
+        } catch (err) {
+          resolve({});
+        }
+      };
+      fr.onerror = function () {
+        resolve({});
+      };
+      fr.readAsArrayBuffer(file);
+    });
+  };
+})();
+</script>

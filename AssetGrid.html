@@ -1,0 +1,1452 @@
+<script>
+/** Asset Management grid — views, header filter/sort, columns, Excel (client-side). */
+
+var assetGrid = {
+  filters: {},
+  sortBy: 'assetNumber',
+  sortDir: 'asc',
+  columnOrder: [],
+  hiddenColumns: [],
+  columnWidths: {},
+  currentViewName: 'Standard',
+  views: [],
+  defaultViewName: 'Standard',
+  hdrKey: null,
+  hdrSelected: null,
+  viewsLoaded: false
+};
+
+var ASSET_BLANK_TOKEN_ = '__blank__';
+
+function assetGridDefaultConfig_() {
+  return {
+    filters: {},
+    sortBy: 'assetNumber',
+    sortDir: 'asc',
+    columnOrder: ASSET_GRID_COLS_.map(function (c) {
+      return c.key;
+    }),
+    hiddenColumns: [],
+    columnWidths: {}
+  };
+}
+
+function assetGridColDef_(key) {
+  for (var i = 0; i < ASSET_GRID_COLS_.length; i++) {
+    if (ASSET_GRID_COLS_[i].key === key) return ASSET_GRID_COLS_[i];
+  }
+  return null;
+}
+
+function assetGridSanitizeConfig_(cfg) {
+  var base = assetGridDefaultConfig_();
+  cfg = cfg || {};
+  var filters = {};
+  var src = cfg.filters || {};
+  Object.keys(src).forEach(function (k) {
+    var v = src[k];
+    if (v == null) return;
+    if (Object.prototype.toString.call(v) === '[object Array]') {
+      var arr = [];
+      for (var i = 0; i < v.length; i++) {
+        var item = String(v[i] == null ? '' : v[i]);
+        if (item.trim() === '') continue;
+        arr.push(item);
+      }
+      if (arr.length) filters[k] = arr;
+    } else {
+      var sv = String(v);
+      if (sv.trim()) filters[k] = sv;
+    }
+  });
+  var order = [];
+  var seen = {};
+  var rawOrder = cfg.columnOrder && cfg.columnOrder.length ? cfg.columnOrder : base.columnOrder;
+  rawOrder.forEach(function (k) {
+    if (!assetGridColDef_(k) || seen[k]) return;
+    seen[k] = true;
+    order.push(k);
+  });
+  ASSET_GRID_COLS_.forEach(function (c) {
+    if (!seen[c.key]) {
+      seen[c.key] = true;
+      order.push(c.key);
+    }
+  });
+  var hidden = [];
+  (cfg.hiddenColumns || []).forEach(function (k) {
+    if (assetGridColDef_(k) && hidden.indexOf(k) < 0) hidden.push(k);
+  });
+  var widths = {};
+  var cw = cfg.columnWidths || {};
+  Object.keys(cw).forEach(function (k) {
+    var n = Number(cw[k]);
+    if (Number.isFinite(n) && n >= 40 && n <= 800) widths[k] = Math.round(n);
+  });
+  return {
+    filters: filters,
+    sortBy: assetGridColDef_(cfg.sortBy) ? cfg.sortBy : base.sortBy,
+    sortDir: String(cfg.sortDir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+    columnOrder: order,
+    hiddenColumns: hidden,
+    columnWidths: widths
+  };
+}
+
+function applyAssetViewConfig_(cfg) {
+  var clean = assetGridSanitizeConfig_(cfg);
+  assetGrid.filters = clean.filters;
+  assetGrid.sortBy = clean.sortBy;
+  assetGrid.sortDir = clean.sortDir;
+  assetGrid.columnOrder = clean.columnOrder;
+  assetGrid.hiddenColumns = clean.hiddenColumns;
+  assetGrid.columnWidths = clean.columnWidths;
+}
+
+function buildCurrentAssetViewConfig_() {
+  return {
+    filters: JSON.parse(JSON.stringify(assetGrid.filters || {})),
+    sortBy: assetGrid.sortBy,
+    sortDir: assetGrid.sortDir,
+    columnOrder: (assetGrid.columnOrder || []).slice(),
+    hiddenColumns: (assetGrid.hiddenColumns || []).slice(),
+    columnWidths: JSON.parse(JSON.stringify(assetGrid.columnWidths || {}))
+  };
+}
+
+function getActiveAssetColumns_() {
+  var hidden = {};
+  (assetGrid.hiddenColumns || []).forEach(function (k) {
+    hidden[k] = true;
+  });
+  var cols = [];
+  (assetGrid.columnOrder || []).forEach(function (k) {
+    if (hidden[k]) return;
+    var def = assetGridColDef_(k);
+    if (def) cols.push(def);
+  });
+  return cols;
+}
+
+function assetCellRaw_(a, key) {
+  var v = a && a[key];
+  if (v == null) return '';
+  return String(v).trim();
+}
+
+function assetRowsAfterFilters_(rows) {
+  rows = rows || [];
+  var filters = assetGrid.filters || {};
+  var keys = Object.keys(filters);
+  var out = rows;
+  if (keys.length) {
+    out = rows.filter(function (a) {
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var wanted = filters[k];
+        if (!wanted || !wanted.length) continue;
+        var raw = assetCellRaw_(a, k);
+        var token = raw === '' ? ASSET_BLANK_TOKEN_ : raw;
+        var hit = false;
+        for (var j = 0; j < wanted.length; j++) {
+          if (String(wanted[j]) === token || String(wanted[j]) === raw) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }
+  var inp = document.getElementById('assetSearch');
+  var q = inp ? String(inp.value || '').trim().toLowerCase() : '';
+  if (q) {
+    out = out.filter(function (a) {
+      return assetSearchableText_(a).indexOf(q) !== -1;
+    });
+  }
+  return out;
+}
+
+function assetRowsSorted_(rows) {
+  var key = assetGrid.sortBy || 'assetNumber';
+  var dir = assetGrid.sortDir === 'desc' ? -1 : 1;
+  return rows.slice().sort(function (a, b) {
+    var av = assetCellRaw_(a, key).toLowerCase();
+    var bv = assetCellRaw_(b, key).toLowerCase();
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    var an = assetCellRaw_(a, 'assetNumber').toLowerCase();
+    var bn = assetCellRaw_(b, 'assetNumber').toLowerCase();
+    if (an < bn) return -1;
+    if (an > bn) return 1;
+    return 0;
+  });
+}
+
+function getProcessedAssetRows_() {
+  return assetRowsSorted_(assetRowsAfterFilters_(_assetListRows || []));
+}
+
+function distinctAssetValuesForCol_(key, scopeRows) {
+  var map = {};
+  var hasBlank = false;
+  (scopeRows || []).forEach(function (a) {
+    var raw = assetCellRaw_(a, key);
+    if (raw === '') {
+      hasBlank = true;
+      return;
+    }
+    map[raw] = true;
+  });
+  var vals = Object.keys(map).sort(function (a, b) {
+    return a.toLowerCase().localeCompare(b.toLowerCase());
+  });
+  if (hasBlank) vals.unshift(ASSET_BLANK_TOKEN_);
+  return vals;
+}
+
+function scopeRowsForHdrFilter_(exceptKey) {
+  var filters = assetGrid.filters || {};
+  var keys = Object.keys(filters).filter(function (k) {
+    return k !== exceptKey;
+  });
+  if (!keys.length) return _assetListRows || [];
+  var saved = assetGrid.filters;
+  var tmp = {};
+  keys.forEach(function (k) {
+    tmp[k] = saved[k];
+  });
+  assetGrid.filters = tmp;
+  var rows = assetRowsAfterFilters_(_assetListRows || []);
+  assetGrid.filters = saved;
+  return rows;
+}
+
+function ensureAssetHdrMenu_() {
+  var menu = document.getElementById('assetHdrMenu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'assetHdrMenu';
+  menu.className = 'hdr-menu hidden';
+  menu.innerHTML =
+    '<div class="hdr-menu-title" id="assetHdrMenuTitle"></div>' +
+    '<div class="hdr-menu-sort">' +
+    '<button type="button" class="btn btn-sm" id="assetHdrSortAsc">Sort A → Z</button>' +
+    '<button type="button" class="btn btn-sm" id="assetHdrSortDesc">Sort Z → A</button>' +
+    '</div>' +
+    '<label class="hdr-menu-label" for="assetHdrMenuInput">Filter values</label>' +
+    '<input type="text" id="assetHdrMenuInput" placeholder="Search values…" autocomplete="off" />' +
+    '<div class="hdr-menu-links">' +
+    '<button type="button" class="hdr-linkbtn" id="assetHdrSelectAll">Select all</button>' +
+    '<button type="button" class="hdr-linkbtn" id="assetHdrClearSel">Clear</button>' +
+    '<span class="hdr-menu-count" id="assetHdrMenuCount"></span>' +
+    '</div>' +
+    '<div class="hdr-menu-list" id="assetHdrMenuList"></div>' +
+    '<div class="hdr-menu-actions">' +
+    '<button type="button" class="btn btn-sm" id="assetHdrRemove">Remove filter</button>' +
+    '<button type="button" class="btn btn-sm btn-primary" id="assetHdrApply">Apply</button>' +
+    '</div>';
+  document.body.appendChild(menu);
+  document.getElementById('assetHdrSortAsc').onclick = function () {
+    applyAssetHdrSort_('asc');
+  };
+  document.getElementById('assetHdrSortDesc').onclick = function () {
+    applyAssetHdrSort_('desc');
+  };
+  document.getElementById('assetHdrApply').onclick = applyAssetHdrFilter_;
+  document.getElementById('assetHdrRemove').onclick = function () {
+    if (assetGrid.hdrKey && assetGrid.filters[assetGrid.hdrKey]) {
+      delete assetGrid.filters[assetGrid.hdrKey];
+    }
+    closeAssetHdrMenu_();
+    renderAssetGrid_();
+  };
+  document.getElementById('assetHdrSelectAll').onclick = function () {
+    var boxes = menu.querySelectorAll('#assetHdrMenuList input[type="checkbox"]');
+    assetGrid.hdrSelected = new Set();
+    boxes.forEach(function (b) {
+      b.checked = true;
+      assetGrid.hdrSelected.add(b.value);
+    });
+    updateAssetHdrCount_();
+  };
+  document.getElementById('assetHdrClearSel').onclick = function () {
+    assetGrid.hdrSelected = new Set();
+    menu.querySelectorAll('#assetHdrMenuList input[type="checkbox"]').forEach(function (b) {
+      b.checked = false;
+    });
+    updateAssetHdrCount_();
+  };
+  document.getElementById('assetHdrMenuInput').addEventListener('input', function () {
+    renderAssetHdrValueList_(this.value);
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (!menu.classList.contains('hidden') && !menu.contains(e.target) && !e.target.closest('.asset-th-btn')) {
+      closeAssetHdrMenu_();
+    }
+  });
+  return menu;
+}
+
+function updateAssetHdrCount_() {
+  var el = document.getElementById('assetHdrMenuCount');
+  if (!el) return;
+  var n = assetGrid.hdrSelected ? assetGrid.hdrSelected.size : 0;
+  el.textContent = n ? n + ' selected' : '';
+}
+
+function renderAssetHdrValueList_(term) {
+  var list = document.getElementById('assetHdrMenuList');
+  if (!list || !assetGrid.hdrKey) return;
+  term = String(term || '')
+    .trim()
+    .toLowerCase();
+  var vals = distinctAssetValuesForCol_(assetGrid.hdrKey, scopeRowsForHdrFilter_(assetGrid.hdrKey));
+  if (!assetGrid.hdrSelected) assetGrid.hdrSelected = new Set();
+  list.innerHTML = vals
+    .filter(function (v) {
+      if (!term) return true;
+      var label = v === ASSET_BLANK_TOKEN_ ? '(blank)' : v;
+      return label.toLowerCase().indexOf(term) !== -1;
+    })
+    .map(function (v) {
+      var label = v === ASSET_BLANK_TOKEN_ ? '(blank)' : v;
+      var checked = assetGrid.hdrSelected.has(v) ? ' checked' : '';
+      return (
+        '<label class="hdr-menu-item"><input type="checkbox" value="' +
+        escapeAttr(v) +
+        '"' +
+        checked +
+        ' /><span>' +
+        escapeHtml(label) +
+        '</span></label>'
+      );
+    })
+    .join('');
+  list.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+    box.addEventListener('change', function () {
+      if (box.checked) assetGrid.hdrSelected.add(box.value);
+      else assetGrid.hdrSelected.delete(box.value);
+      updateAssetHdrCount_();
+    });
+  });
+  updateAssetHdrCount_();
+}
+
+function openAssetHdrMenu_(key, th) {
+  var def = assetGridColDef_(key);
+  if (!def) return;
+  var menu = ensureAssetHdrMenu_();
+  assetGrid.hdrKey = key;
+  var existing = assetGrid.filters[key] || [];
+  assetGrid.hdrSelected = new Set(existing);
+  document.getElementById('assetHdrMenuTitle').textContent = def.label;
+  document.getElementById('assetHdrMenuInput').value = '';
+  renderAssetHdrValueList_('');
+  menu.classList.remove('hidden');
+  var rect = th.getBoundingClientRect();
+  var top = rect.bottom + window.scrollY + 4;
+  var left = rect.left + window.scrollX;
+  menu.style.top = top + 'px';
+  menu.style.left = Math.min(left, window.scrollX + window.innerWidth - 320) + 'px';
+}
+
+function closeAssetHdrMenu_() {
+  var menu = document.getElementById('assetHdrMenu');
+  if (menu) menu.classList.add('hidden');
+  assetGrid.hdrKey = null;
+}
+
+function applyAssetHdrSort_(dir) {
+  if (!assetGrid.hdrKey) return;
+  assetGrid.sortBy = assetGrid.hdrKey;
+  assetGrid.sortDir = dir === 'desc' ? 'desc' : 'asc';
+  closeAssetHdrMenu_();
+  renderAssetGrid_();
+}
+
+function applyAssetHdrFilter_() {
+  if (!assetGrid.hdrKey) return;
+  var selected = [];
+  if (assetGrid.hdrSelected) {
+    assetGrid.hdrSelected.forEach(function (v) {
+      selected.push(v);
+    });
+  }
+  if (!selected.length) delete assetGrid.filters[assetGrid.hdrKey];
+  else assetGrid.filters[assetGrid.hdrKey] = selected;
+  closeAssetHdrMenu_();
+  renderAssetGrid_();
+}
+
+function renderAssetGrid_() {
+  var el = document.getElementById('assetList');
+  if (!el) return;
+  if (!(assetGrid.columnOrder || []).length) applyAssetViewConfig_(assetGridDefaultConfig_());
+  var cols = getActiveAssetColumns_();
+  var rows = getProcessedAssetRows_();
+  var thead =
+    '<thead><tr>' +
+    '<th class="asset-actions-th" scope="col"><span class="sr-only">Actions</span></th>' +
+    cols
+      .map(function (c) {
+        var filtered = !!(assetGrid.filters[c.key] && assetGrid.filters[c.key].length);
+        var sorted = assetGrid.sortBy === c.key;
+        var cls = 'asset-th' + (filtered ? ' is-filtered' : '') + (sorted ? ' is-sorted' : '');
+        var mark = '';
+        if (sorted) mark = assetGrid.sortDir === 'desc' ? ' ↓' : ' ↑';
+        if (filtered) mark += ' ▾';
+        var w = assetGrid.columnWidths[c.key];
+        var style = w ? ' style="min-width:' + w + 'px;width:' + w + 'px"' : '';
+        return (
+          '<th class="' +
+          cls +
+          '" scope="col" data-col="' +
+          escapeAttr(c.key) +
+          '"' +
+          style +
+          '>' +
+          '<button type="button" class="asset-th-btn" data-col="' +
+          escapeAttr(c.key) +
+          '">' +
+          escapeHtml(c.label) +
+          mark +
+          '</button></th>'
+        );
+      })
+      .join('') +
+    '</tr></thead>';
+  var tbody =
+    '<tbody>' +
+    rows
+      .map(function (a) {
+        var num = String(a.assetNumber || '').trim();
+        var id = a.assetId != null && a.assetId !== '' ? String(a.assetId) : '';
+        var cells =
+          assetActionsCellHtml_(a) +
+          cols
+            .map(function (c) {
+              var w = assetGrid.columnWidths[c.key];
+              var style = w ? ' style="min-width:' + w + 'px;max-width:' + w + 'px"' : '';
+              return (
+                '<td title="' +
+                escapeAttr(assetGridCell_(a, c.key)) +
+                '"' +
+                style +
+                '>' +
+                escapeHtml(assetGridCell_(a, c.key)) +
+                '</td>'
+              );
+            })
+            .join('');
+        return (
+          '<tr class="asset-data-row"' +
+          (id ? ' data-asset-id="' + escapeAttr(id) + '"' : '') +
+          (num ? ' data-asset="' + escapeAttr(encodeURIComponent(num)) + '"' : '') +
+          '>' +
+          cells +
+          '</tr>'
+        );
+      })
+      .join('') +
+    '</tbody>';
+  el.innerHTML =
+    '<div class="assets-grid-wrap">' +
+    '<table class="assets-grid">' +
+    thead +
+    tbody +
+    '</table></div>' +
+    '<p class="muted small assets-grid-hint">Showing ' +
+    rows.length +
+    ' of ' +
+    (_assetListRows || []).length +
+    ' asset' +
+    ((_assetListRows || []).length === 1 ? '' : 's') +
+    '. Ctrl+double-click a row for assignment, purchase, and last audit details.</p>';
+
+  el.querySelectorAll('.asset-th-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var key = btn.getAttribute('data-col');
+      var th = btn.closest('th');
+      if (key && th) openAssetHdrMenu_(key, th);
+    });
+  });
+  bindAssetRowDetailEvents_();
+}
+
+function applyAssetFilter() {
+  renderAssetGrid_();
+}
+
+function renderAssetRows_(rows) {
+  // Legacy entry — full pipeline uses _assetListRows + assetGrid state.
+  renderAssetGrid_();
+}
+
+function populateAssetViewSelect_() {
+  var sel = document.getElementById('assetViewSelect');
+  if (!sel) return;
+  var cur = assetGrid.currentViewName || 'Standard';
+  sel.innerHTML = (assetGrid.views || [])
+    .map(function (v) {
+      var label = v.name;
+      if (v.name === assetGrid.defaultViewName) label += ' (Default)';
+      return (
+        '<option value="' +
+        escapeAttr(v.name) +
+        '"' +
+        (v.name === cur ? ' selected' : '') +
+        '>' +
+        escapeHtml(label) +
+        '</option>'
+      );
+    })
+    .join('');
+  if (!sel.options.length) {
+    sel.innerHTML = '<option value="Standard">Standard</option>';
+  }
+}
+
+function findAssetViewByName_(name) {
+  name = String(name || '');
+  for (var i = 0; i < (assetGrid.views || []).length; i++) {
+    if (assetGrid.views[i].name === name) return assetGrid.views[i];
+  }
+  return null;
+}
+
+function applyNamedAssetView_(name) {
+  var v = findAssetViewByName_(name);
+  if (!v) {
+    applyAssetViewConfig_(assetGridDefaultConfig_());
+    assetGrid.currentViewName = 'Standard';
+  } else {
+    applyAssetViewConfig_(v.config);
+    assetGrid.currentViewName = v.name;
+  }
+  populateAssetViewSelect_();
+  renderAssetGrid_();
+}
+
+function loadAssetViewsThen_(done) {
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (r && r.ok) {
+        assetGrid.views = r.views || [];
+        assetGrid.defaultViewName = r.defaultViewName || 'Standard';
+        assetGrid.viewsLoaded = true;
+        if (!findAssetViewByName_('Standard')) {
+          assetGrid.views.unshift({
+            name: 'Standard',
+            isTemplate: true,
+            config: assetGridDefaultConfig_()
+          });
+        }
+        applyNamedAssetView_(assetGrid.defaultViewName);
+      } else {
+        applyAssetViewConfig_(assetGridDefaultConfig_());
+        assetGrid.currentViewName = 'Standard';
+        assetGrid.views = [{ name: 'Standard', isTemplate: true, config: assetGridDefaultConfig_() }];
+        populateAssetViewSelect_();
+        renderAssetGrid_();
+        if (r && r.error) toast(r.error);
+      }
+      if (typeof done === 'function') done();
+    })
+    .withFailureHandler(function (e) {
+      applyAssetViewConfig_(assetGridDefaultConfig_());
+      assetGrid.views = [{ name: 'Standard', isTemplate: true, config: assetGridDefaultConfig_() }];
+      populateAssetViewSelect_();
+      renderAssetGrid_();
+      toast(String(e));
+      if (typeof done === 'function') done();
+    })
+    .apiListAssetViews();
+}
+
+function deleteCurrentAssetView_() {
+  var name = assetGrid.currentViewName;
+  if (!name || name === 'Standard') {
+    toast('The Standard view cannot be deleted');
+    return;
+  }
+  openAssetConfirmModal_({
+    title: 'Delete view?',
+    lead: 'Delete saved view “' + name + '”?',
+    detail: 'This only removes the view layout. Assets are not deleted.',
+    confirmLabel: 'Delete view',
+    onConfirm: function (close) {
+      google.script.run
+        .withSuccessHandler(function (r) {
+          close();
+          if (!r || !r.ok) {
+            toast(r && r.error ? r.error : 'Delete view failed');
+            return;
+          }
+          toast('View deleted');
+          loadAssetViewsThen_();
+        })
+        .withFailureHandler(function (e) {
+          close();
+          toast(String(e));
+        })
+        .apiDeleteAssetView({ name: name });
+    }
+  });
+}
+
+function openAssetConfirmModal_(opts) {
+  opts = opts || {};
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="assetConfirmOv">' +
+    '<div class="modal modal-confirm" role="dialog" aria-modal="true">' +
+    '<h3>' +
+    escapeHtml(opts.title || 'Confirm') +
+    '</h3>' +
+    '<p class="modal-confirm-lead">' +
+    escapeHtml(opts.lead || '') +
+    '</p>' +
+    (opts.detail ? '<p class="muted small">' + escapeHtml(opts.detail) + '</p>' : '') +
+    '<div class="form-actions">' +
+    '<button type="button" class="btn btn-danger" id="assetConfirmOk">' +
+    escapeHtml(opts.confirmLabel || 'Confirm') +
+    '</button>' +
+    '<button type="button" class="btn btn-ghost" id="assetConfirmCancel">Cancel</button>' +
+    '</div></div></div>';
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('assetConfirmCancel').onclick = close;
+  document.getElementById('assetConfirmOv').onclick = function (e) {
+    if (e.target.id === 'assetConfirmOv') close();
+  };
+  document.getElementById('assetConfirmOk').onclick = function () {
+    if (typeof opts.onConfirm === 'function') opts.onConfirm(close);
+    else close();
+  };
+}
+
+function openAssetViewSettingsModal_() {
+  var root = document.getElementById('modalRoot');
+  var hidden = {};
+  (assetGrid.hiddenColumns || []).forEach(function (k) {
+    hidden[k] = true;
+  });
+  var order = (assetGrid.columnOrder || []).slice();
+  root.innerHTML =
+    '<div class="modal-overlay" id="vsAssetOv">' +
+    '<div class="modal modal-wide"><h3>View settings</h3>' +
+    '<p class="muted small">Choose which columns appear in the Assets grid. Drag is not required — use the order list (top = left).</p>' +
+    '<div class="vs-col-list" id="vsAssetColList"></div>' +
+    '<div class="form-row" style="margin-top:12px"><label for="vsDefaultView">Load this view on startup</label>' +
+    '<select id="vsDefaultView"></select></div>' +
+    '<div class="form-actions">' +
+    '<button type="button" class="btn btn-primary" id="vsAssetApply">Apply</button>' +
+    '<button type="button" class="btn btn-ghost" id="vsAssetCancel">Cancel</button>' +
+    '</div></div></div>';
+
+  var list = document.getElementById('vsAssetColList');
+  list.innerHTML = order
+    .map(function (k, idx) {
+      var def = assetGridColDef_(k);
+      if (!def) return '';
+      return (
+        '<label class="vs-col-item">' +
+        '<input type="checkbox" data-key="' +
+        escapeAttr(k) +
+        '"' +
+        (hidden[k] ? '' : ' checked') +
+        ' />' +
+        '<span class="vs-col-label">' +
+        escapeHtml(def.label) +
+        '</span>' +
+        '<button type="button" class="hdr-linkbtn vs-move-up" data-idx="' +
+        idx +
+        '"' +
+        (idx === 0 ? ' disabled' : '') +
+        '>Up</button>' +
+        '<button type="button" class="hdr-linkbtn vs-move-down" data-idx="' +
+        idx +
+        '"' +
+        (idx === order.length - 1 ? ' disabled' : '') +
+        '>Down</button>' +
+        '</label>'
+      );
+    })
+    .join('');
+
+  function checkedMap() {
+    var m = {};
+    list.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+      m[box.getAttribute('data-key')] = box.checked;
+    });
+    return m;
+  }
+
+  function refreshList() {
+    var checked = checkedMap();
+    list.innerHTML = order
+      .map(function (k, idx) {
+        var def = assetGridColDef_(k);
+        if (!def) return '';
+        var isOn = Object.prototype.hasOwnProperty.call(checked, k) ? checked[k] : !hidden[k];
+        return (
+          '<label class="vs-col-item">' +
+          '<input type="checkbox" data-key="' +
+          escapeAttr(k) +
+          '"' +
+          (isOn ? ' checked' : '') +
+          ' />' +
+          '<span class="vs-col-label">' +
+          escapeHtml(def.label) +
+          '</span>' +
+          '<button type="button" class="hdr-linkbtn vs-move-up" data-idx="' +
+          idx +
+          '"' +
+          (idx === 0 ? ' disabled' : '') +
+          '>Up</button>' +
+          '<button type="button" class="hdr-linkbtn vs-move-down" data-idx="' +
+          idx +
+          '"' +
+          (idx === order.length - 1 ? ' disabled' : '') +
+          '>Down</button>' +
+          '</label>'
+        );
+      })
+      .join('');
+    bindMove();
+  }
+
+  function bindMove() {
+    list.querySelectorAll('.vs-move-up').forEach(function (btn) {
+      btn.onclick = function () {
+        var i = Number(btn.getAttribute('data-idx'));
+        if (i <= 0) return;
+        var t = order[i - 1];
+        order[i - 1] = order[i];
+        order[i] = t;
+        refreshList();
+      };
+    });
+    list.querySelectorAll('.vs-move-down').forEach(function (btn) {
+      btn.onclick = function () {
+        var i = Number(btn.getAttribute('data-idx'));
+        if (i >= order.length - 1) return;
+        var t = order[i + 1];
+        order[i + 1] = order[i];
+        order[i] = t;
+        refreshList();
+      };
+    });
+  }
+  bindMove();
+
+  var defSel = document.getElementById('vsDefaultView');
+  defSel.innerHTML = (assetGrid.views || [])
+    .map(function (v) {
+      return (
+        '<option value="' +
+        escapeAttr(v.name) +
+        '"' +
+        (v.name === assetGrid.defaultViewName ? ' selected' : '') +
+        '>' +
+        escapeHtml(v.name) +
+        '</option>'
+      );
+    })
+    .join('');
+
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('vsAssetCancel').onclick = close;
+  document.getElementById('vsAssetOv').onclick = function (e) {
+    if (e.target.id === 'vsAssetOv') close();
+  };
+  document.getElementById('vsAssetApply').onclick = function () {
+    var nextHidden = [];
+    list.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+      if (!box.checked) nextHidden.push(box.getAttribute('data-key'));
+    });
+    assetGrid.columnOrder = order.slice();
+    assetGrid.hiddenColumns = nextHidden;
+    var pick = defSel.value || 'Standard';
+    google.script.run
+      .withSuccessHandler(function () {
+        assetGrid.defaultViewName = pick;
+        close();
+        renderAssetGrid_();
+        toast('View settings applied');
+      })
+      .withFailureHandler(function (e) {
+        close();
+        renderAssetGrid_();
+        toast(String(e));
+      })
+      .apiSetDefaultAssetView({ viewName: pick });
+  };
+}
+
+function excelEscapeXml_(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function excelColName_(idx) {
+  var n = idx + 1;
+  var s = '';
+  while (n > 0) {
+    var m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function buildAssetExcelSheetXml_(columns, rows) {
+  function cellXml_(cIdx, rIdx, value) {
+    var ref = excelColName_(cIdx) + rIdx;
+    var t = String(value == null ? '' : value);
+    if (t === '—' || t === '') t = '';
+    return (
+      '<c r="' +
+      ref +
+      '" t="inlineStr"><is><t>' +
+      excelEscapeXml_(t) +
+      '</t></is></c>'
+    );
+  }
+  var sheet =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetData>';
+  sheet += '<row r="1">';
+  columns.forEach(function (col, i) {
+    sheet += cellXml_(i, 1, col.label || col.key || '');
+  });
+  sheet += '</row>';
+  rows.forEach(function (row, rIdx) {
+    var excelRow = rIdx + 2;
+    sheet += '<row r="' + excelRow + '">';
+    columns.forEach(function (col, cIdx) {
+      var v = assetCellRaw_(row, col.key);
+      sheet += cellXml_(cIdx, excelRow, v);
+    });
+    sheet += '</row>';
+  });
+  sheet += '</sheetData></worksheet>';
+  return sheet;
+}
+
+function buildAssetExcelBlob_(columns, rows) {
+  if (typeof JSZip === 'undefined') {
+    return Promise.reject(new Error('Excel library (JSZip) is not available.'));
+  }
+  var zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '</Types>'
+  );
+  zip.folder('_rels').file(
+    '.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>'
+  );
+  var xl = zip.folder('xl');
+  xl.file(
+    'workbook.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Assets" sheetId="1" r:id="rId1"/></sheets></workbook>'
+  );
+  xl.folder('_rels').file(
+    'workbook.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '</Relationships>'
+  );
+  xl.folder('worksheets').file('sheet1.xml', buildAssetExcelSheetXml_(columns, rows));
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  });
+}
+
+function downloadAssetGridExcel_() {
+  var columns = getActiveAssetColumns_();
+  if (!columns.length) {
+    toast('No visible columns to export');
+    return;
+  }
+  var rows = getProcessedAssetRows_();
+  var btn = document.getElementById('assetExcelBtn');
+  if (btn) btn.disabled = true;
+  buildAssetExcelBlob_(columns, rows)
+    .then(function (blob) {
+      var d = new Date();
+      var mm = d.getMonth() + 1;
+      var dd = d.getDate();
+      var stamp =
+        d.getFullYear() +
+        (mm < 10 ? '0' : '') +
+        mm +
+        (dd < 10 ? '0' : '') +
+        dd;
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'asset-management-' + stamp + '.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+      toast('Exported ' + rows.length + ' rows');
+    })
+    .catch(function (e) {
+      toast(e && e.message ? e.message : String(e));
+    })
+    .then(function () {
+      if (btn) btn.disabled = false;
+    });
+}
+
+function initAssetGridToolbarOnce_() {
+  if (window._assetGridToolbarInited) return;
+  window._assetGridToolbarInited = true;
+  var sel = document.getElementById('assetViewSelect');
+  if (sel) {
+    sel.addEventListener('change', function () {
+      applyNamedAssetView_(sel.value);
+    });
+  }
+  var saveBtn = document.getElementById('assetViewSave');
+  if (saveBtn) saveBtn.onclick = function () {
+    saveCurrentAssetView_(false);
+  };
+  var saveAsBtn = document.getElementById('assetViewSaveAs');
+  if (saveAsBtn) saveAsBtn.onclick = function () {
+    saveCurrentAssetView_(true);
+  };
+  var delBtn = document.getElementById('assetViewDelete');
+  if (delBtn) delBtn.onclick = deleteCurrentAssetView_;
+  var gear = document.getElementById('assetViewSettings');
+  if (gear) gear.onclick = openAssetViewSettingsModal_;
+  var clearFilters = document.getElementById('assetFilterClear');
+  if (clearFilters) {
+    clearFilters.onclick = function () {
+      assetGrid.filters = {};
+      renderAssetGrid_();
+    };
+  }
+  var excel = document.getElementById('assetExcelBtn');
+  if (excel) excel.onclick = downloadAssetGridExcel_;
+}
+
+function saveCurrentAssetView_(asNew) {
+  var name = assetGrid.currentViewName || 'Standard';
+  if (asNew) {
+    openAssetSaveAsModal_(name === 'Standard' ? '' : name);
+    return;
+  }
+  openAssetConfirmModal_({
+    title: 'Overwrite view?',
+    lead: 'Overwrite saved view “' + name + '”?',
+    detail: 'Filters, sort, and column layout will be replaced with the current grid settings.',
+    confirmLabel: 'Overwrite',
+    onConfirm: function (close) {
+      close();
+      persistAssetView_(name);
+    }
+  });
+}
+
+function openAssetSaveAsModal_(suggested) {
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="saveAsOv">' +
+    '<div class="modal modal-confirm"><h3>Save view as</h3>' +
+    '<div class="form-row"><label for="saveAsName">View name</label>' +
+    '<input id="saveAsName" type="text" /></div>' +
+    '<div class="form-actions">' +
+    '<button type="button" class="btn btn-primary" id="saveAsOk">Save</button>' +
+    '<button type="button" class="btn btn-ghost" id="saveAsCancel">Cancel</button>' +
+    '</div></div></div>';
+  var inp = document.getElementById('saveAsName');
+  inp.value = suggested || '';
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('saveAsCancel').onclick = close;
+  document.getElementById('saveAsOv').onclick = function (e) {
+    if (e.target.id === 'saveAsOv') close();
+  };
+  document.getElementById('saveAsOk').onclick = function () {
+    var name = inp.value.trim();
+    if (!name) {
+      toast('View name is required');
+      return;
+    }
+    close();
+    persistAssetView_(name);
+  };
+  setTimeout(function () {
+    inp.focus();
+  }, 50);
+}
+
+function persistAssetView_(name) {
+  var config = buildCurrentAssetViewConfig_();
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) {
+        toast(r && r.error ? r.error : 'Save view failed');
+        return;
+      }
+      toast('View saved');
+      assetGrid.currentViewName = r.name || name;
+      loadAssetViewsThen_(function () {
+        applyNamedAssetView_(assetGrid.currentViewName);
+      });
+    })
+    .withFailureHandler(function (e) {
+      toast(String(e));
+    })
+    .apiSaveAssetView({ name: name, config: config });
+}
+
+function getAssetGridColCount_() {
+  return 1 + getActiveAssetColumns_().length;
+}
+
+function clearAssetInlineDetail_() {
+  var row = document.querySelector('tr.asset-inline-detail-row');
+  if (row) row.remove();
+}
+
+function insertAssetInlineDetailRow_(afterRow, html) {
+  clearAssetInlineDetail_();
+  if (!afterRow) return null;
+  var detailRow = document.createElement('tr');
+  detailRow.className = 'asset-inline-detail-row';
+  var assetId = afterRow.getAttribute('data-asset-id') || '';
+  if (assetId) detailRow.setAttribute('data-detail-asset-id', assetId);
+  var td = document.createElement('td');
+  td.colSpan = getAssetGridColCount_();
+  td.innerHTML = '<div class="asset-inline-detail">' + html + '</div>';
+  detailRow.appendChild(td);
+  afterRow.insertAdjacentElement('afterend', detailRow);
+  return detailRow;
+}
+
+function bindAssetRowDetailEvents_() {
+  var table = document.querySelector('table.assets-grid');
+  if (!table) return;
+  table.querySelectorAll('tr.asset-data-row').forEach(function (tr) {
+    tr.addEventListener('dblclick', function (e) {
+      if (e.target.closest('.asset-action-btn') || e.target.closest('.asset-th-btn')) return;
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      loadAssetDetailInline_(tr);
+    });
+    tr.addEventListener('click', function (e) {
+      if (e.target.closest('.asset-action-btn') || e.target.closest('a') || e.target.closest('button')) {
+        return;
+      }
+      clearAssetInlineDetail_();
+    });
+  });
+}
+
+function detailDash_(v) {
+  v = v == null ? '' : String(v).trim();
+  if (!v) return '—';
+  var m = v.match(/^(\d{4}-\d{2}-\d{2})T/);
+  if (m) v = m[1];
+  return escapeHtml(v);
+}
+
+function detailKvTable_(pairs) {
+  return (
+    '<table class="asset-detail-kv"><tbody>' +
+    pairs
+      .map(function (p) {
+        return (
+          '<tr><th scope="row">' +
+          escapeHtml(p[0]) +
+          '</th><td>' +
+          detailDash_(p[1]) +
+          '</td></tr>'
+        );
+      })
+      .join('') +
+    '</tbody></table>'
+  );
+}
+
+function buildAssetDetailHtml_(detail) {
+  detail = detail || {};
+  var asset = detail.asset || {};
+  var asg = detail.assignment;
+  var pur = detail.purchaseAndSold;
+  var audit = detail.lastAudit;
+  var photos = detail.lastAuditPhotos || [];
+  var assetId = asset.assetId != null ? String(asset.assetId) : '';
+  var assetNum = String(asset.assetNumber || '').trim();
+
+  var assignHtml = asg
+    ? detailKvTable_([
+        ['Employee', asg.employee],
+        ['Location', asg.location],
+        ['Project', asg.project],
+        ['Assigned date', asg.assignedDate],
+        ['Last assigned ID', asg.lastAssignedId],
+        ['Outside project area', asg.outsideOfProjectArea]
+      ])
+    : '<p class="muted small">No current assignment on file.</p>';
+
+  var purchaseHtml = pur
+    ? detailKvTable_([
+        ['Purchased date', pur.purchasedDate],
+        ['Purchase price', pur.purchasePrice],
+        ['Market value', pur.marketValue],
+        ['Listed for sale', pur.listedForSale],
+        ['Retired/sold date', pur.retiredSoldDate],
+        ['Meter at purchase', pur.meterAtPurchase]
+      ]) +
+      (pur.linkToPurchaseDocs
+        ? '<p class="small" style="margin:0.45rem 0 0"><a href="' +
+          escapeAttr(pur.linkToPurchaseDocs) +
+          '" target="_blank" rel="noopener">Purchase documents</a></p>'
+        : '')
+    : '<p class="muted small">No purchase / sold record on file.</p>';
+
+  var auditHtml = '';
+  if (!audit) {
+    auditHtml = '<p class="muted small">No completed audits yet.</p>';
+  } else {
+    auditHtml =
+      detailKvTable_([
+        ['Date', audit.dateAudited],
+        ['Type', audit.auditType || audit.equipmentType],
+        ['Equipment type', audit.equipmentType],
+        ['Condition', audit.condition],
+        ['Mechanical', audit.mechanicalItems],
+        ['Safety', audit.safetyItems],
+        ['Performed by', audit.performedByEmail || audit.performedBy],
+        ['Status', audit.status]
+      ]) +
+      buildAssetPhotoCarousel_(photos) +
+      '<div class="asset-detail-actions">' +
+      '<button type="button" class="btn btn-sm" data-action="hist-audits" data-asset="' +
+      escapeAttr(encodeURIComponent(assetNum)) +
+      '">Historical audits</button></div>';
+  }
+
+  return (
+    '<div class="asset-detail-wireframe">' +
+    '<section class="asset-detail-panel">' +
+    '<div class="asset-detail-panel-title">Current assignment</div>' +
+    assignHtml +
+    '<div class="asset-detail-actions">' +
+    '<button type="button" class="btn btn-sm" data-action="hist-assign" data-asset-id="' +
+    escapeAttr(assetId) +
+    '">Assignment history</button></div>' +
+    '</section>' +
+    '<section class="asset-detail-panel">' +
+    '<div class="asset-detail-panel-title">Purchase &amp; sold</div>' +
+    purchaseHtml +
+    '</section>' +
+    '<section class="asset-detail-panel asset-detail-panel--audit">' +
+    '<div class="asset-detail-panel-title">Last audit</div>' +
+    auditHtml +
+    '</section></div>'
+  );
+}
+
+function buildAssetPhotoCarousel_(photos) {
+  photos = photos || [];
+  if (!photos.length) {
+    return '<p class="muted small">No photos on the last audit.</p>';
+  }
+  var slides = photos
+    .map(function (p, i) {
+      var u = p.url || '';
+      return (
+        '<div class="asset-carousel-slide' +
+        (i === 0 ? ' is-active' : '') +
+        '" data-idx="' +
+        i +
+        '">' +
+        (u
+          ? '<a href="' +
+            escapeAttr(u) +
+            '" target="_blank" rel="noopener"><img src="' +
+            escapeAttr(u) +
+            '" alt="" loading="lazy" /></a>'
+          : '<span class="muted small">No URL</span>') +
+        '<div class="asset-carousel-caption">' +
+        escapeHtml(p.notes || p.uploadedAt || '') +
+        '</div></div>'
+      );
+    })
+    .join('');
+  return (
+    '<div class="asset-carousel" data-count="' +
+    photos.length +
+    '">' +
+    '<div class="asset-carousel-stage">' +
+    slides +
+    '</div>' +
+    (photos.length > 1
+      ? '<div class="asset-carousel-nav">' +
+        '<button type="button" class="btn btn-sm asset-carousel-prev">‹</button>' +
+        '<span class="asset-carousel-pos">1 / ' +
+        photos.length +
+        '</span>' +
+        '<button type="button" class="btn btn-sm asset-carousel-next">›</button></div>'
+      : '') +
+    '</div>'
+  );
+}
+
+function initAssetDetailCarousels_(root) {
+  if (!root) return;
+  root.querySelectorAll('.asset-carousel').forEach(function (car) {
+    var slides = car.querySelectorAll('.asset-carousel-slide');
+    if (slides.length < 2) return;
+    var idx = 0;
+    var pos = car.querySelector('.asset-carousel-pos');
+    function show(i) {
+      idx = (i + slides.length) % slides.length;
+      slides.forEach(function (s, n) {
+        if (n === idx) s.classList.add('is-active');
+        else s.classList.remove('is-active');
+      });
+      if (pos) pos.textContent = idx + 1 + ' / ' + slides.length;
+    }
+    var prev = car.querySelector('.asset-carousel-prev');
+    var next = car.querySelector('.asset-carousel-next');
+    if (prev)
+      prev.onclick = function (e) {
+        e.stopPropagation();
+        show(idx - 1);
+      };
+    if (next)
+      next.onclick = function (e) {
+        e.stopPropagation();
+        show(idx + 1);
+      };
+  });
+}
+
+function bindAssetDetailPanelActions_(root, detail) {
+  if (!root) return;
+  root.querySelectorAll('[data-action="hist-assign"]').forEach(function (btn) {
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      openAssignmentHistoryModal_(btn.getAttribute('data-asset-id'));
+    };
+  });
+  root.querySelectorAll('[data-action="hist-audits"]').forEach(function (btn) {
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      var enc = btn.getAttribute('data-asset');
+      openHistoricalAuditsModal_(enc ? decodeURIComponent(enc) : '');
+    };
+  });
+  initAssetDetailCarousels_(root);
+}
+
+function loadAssetDetailInline_(tr) {
+  var assetId = tr.getAttribute('data-asset-id');
+  if (!assetId) {
+    toast('This row has no Asset ID');
+    return;
+  }
+  var detailRow = insertAssetInlineDetailRow_(
+    tr,
+    '<div class="muted small">Loading details…</div>'
+  );
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!detailRow || !document.contains(detailRow)) return;
+      var wrap = detailRow.querySelector('.asset-inline-detail');
+      if (!r || !r.ok || !r.detail) {
+        wrap.innerHTML =
+          '<div class="muted small">' + escapeHtml((r && r.error) || 'Failed to load details') + '</div>';
+        return;
+      }
+      wrap.innerHTML = buildAssetDetailHtml_(r.detail);
+      bindAssetDetailPanelActions_(wrap, r.detail);
+    })
+    .withFailureHandler(function (e) {
+      if (!detailRow || !document.contains(detailRow)) return;
+      var wrap = detailRow.querySelector('.asset-inline-detail');
+      if (wrap) wrap.innerHTML = '<div class="muted small">' + escapeHtml(String(e)) + '</div>';
+    })
+    .apiGetAssetDetail({ assetId: assetId });
+}
+
+function openAssignmentHistoryModal_(assetId) {
+  if (!assetId) {
+    toast('Asset ID required');
+    return;
+  }
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="asgHistOv">' +
+    '<div class="modal modal-wide"><h3>Assignment history</h3>' +
+    '<div id="asgHistBody" class="muted small">Loading…</div>' +
+    '<div class="form-actions"><button type="button" class="btn btn-ghost" id="asgHistClose">Close</button></div>' +
+    '</div></div>';
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('asgHistClose').onclick = close;
+  document.getElementById('asgHistOv').onclick = function (e) {
+    if (e.target.id === 'asgHistOv') close();
+  };
+  google.script.run
+    .withSuccessHandler(function (r) {
+      var body = document.getElementById('asgHistBody');
+      if (!body) return;
+      if (!r || !r.ok) {
+        body.textContent = (r && r.error) || 'Failed to load history';
+        return;
+      }
+      var rows = r.history || [];
+      if (!rows.length) {
+        body.innerHTML = '<p class="muted small" style="margin:0">No historical assignments.</p>';
+        return;
+      }
+      body.innerHTML =
+        '<div class="asset-hist-table-wrap"><table class="asset-hist-table"><thead><tr>' +
+        '<th>Start</th><th>End</th><th>Employee</th><th>Location</th><th>Project</th><th>Assigned ID</th>' +
+        '</tr></thead><tbody>' +
+        rows
+          .map(function (h) {
+            return (
+              '<tr><td>' +
+              detailDash_(h.startAssignedDate) +
+              '</td><td>' +
+              detailDash_(h.endAssignedDate) +
+              '</td><td>' +
+              detailDash_(h.employee) +
+              '</td><td>' +
+              detailDash_(h.location) +
+              '</td><td>' +
+              detailDash_(h.project) +
+              '</td><td>' +
+              detailDash_(h.assignedId) +
+              '</td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table></div>';
+    })
+    .withFailureHandler(function (e) {
+      var body = document.getElementById('asgHistBody');
+      if (body) body.textContent = String(e);
+    })
+    .apiListAssignmentHistory({ assetId: assetId });
+}
+
+function openHistoricalAuditsModal_(assetNumber) {
+  assetNumber = String(assetNumber || '').trim();
+  if (!assetNumber) {
+    toast('Asset Number required');
+    return;
+  }
+  var root = document.getElementById('modalRoot');
+  root.innerHTML =
+    '<div class="modal-overlay" id="audHistOv">' +
+    '<div class="modal modal-wide"><h3>Historical audits — ' +
+    escapeHtml(assetNumber) +
+    '</h3>' +
+    '<div id="audHistBody" class="muted small">Loading…</div>' +
+    '<div class="form-actions"><button type="button" class="btn btn-ghost" id="audHistClose">Close</button></div>' +
+    '</div></div>';
+  function close() {
+    root.innerHTML = '';
+  }
+  document.getElementById('audHistClose').onclick = close;
+  document.getElementById('audHistOv').onclick = function (e) {
+    if (e.target.id === 'audHistOv') close();
+  };
+  google.script.run
+    .withSuccessHandler(function (r) {
+      var body = document.getElementById('audHistBody');
+      if (!body) return;
+      if (!r || !r.ok) {
+        body.textContent = (r && r.error) || 'Failed to load audits';
+        return;
+      }
+      var audits = r.audits || [];
+      if (!audits.length) {
+        body.innerHTML = '<p class="muted small" style="margin:0">No audits found.</p>';
+        return;
+      }
+      body.innerHTML =
+        '<div class="asset-hist-table-wrap"><table class="asset-hist-table"><thead><tr>' +
+        '<th>Date</th><th>Type</th><th>Equipment</th><th>Condition</th><th>By</th><th>Status</th><th></th>' +
+        '</tr></thead><tbody>' +
+        audits
+          .map(function (a) {
+            return (
+              '<tr><td>' +
+              detailDash_(a.dateAudited) +
+              '</td><td>' +
+              detailDash_(a.auditType) +
+              '</td><td>' +
+              detailDash_(a.equipmentType) +
+              '</td><td>' +
+              detailDash_(a.condition) +
+              '</td><td>' +
+              detailDash_(a.performedByEmail || a.performedBy) +
+              '</td><td>' +
+              detailDash_(a.status) +
+              '</td><td>' +
+              (a.auditId
+                ? '<button type="button" class="btn btn-sm" data-report="' +
+                  escapeAttr(a.auditId) +
+                  '">Report</button>'
+                : '') +
+              '</td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table></div>';
+      body.querySelectorAll('[data-report]').forEach(function (btn) {
+        btn.onclick = function () {
+          if (typeof generateInspectionReport === 'function') {
+            generateInspectionReport(btn.getAttribute('data-report'));
+          }
+        };
+      });
+    })
+    .withFailureHandler(function (e) {
+      var body = document.getElementById('audHistBody');
+      if (body) body.textContent = String(e);
+    })
+    .apiListAuditsForAsset(assetNumber);
+}
+</script>
