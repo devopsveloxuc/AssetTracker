@@ -402,10 +402,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  table.assets-grid tbody tr:nth-child(even):not(.asset-inline-detail-row) td {
+  table.assets-grid tbody tr:nth-child(even) td {
     background: var(--row-alt);
   }
-  table.assets-grid tbody tr:hover:not(.asset-inline-detail-row) td {
+  table.assets-grid tbody tr:hover td {
     background: #e8f0fe;
   }
   table.assets-grid th.asset-actions-th,
@@ -788,22 +788,25 @@
   }
 
   table.assets-grid tbody tr.asset-data-row {
-    cursor: default;
+    cursor: pointer;
   }
-  table.assets-grid tbody tr:nth-child(even):not(.asset-inline-detail-row) td {
-    background: var(--row-alt);
+  table.assets-grid tbody tr.asset-data-row.is-selected td,
+  table.assets-grid tbody tr.asset-data-row.is-selected td.asset-actions-cell {
+    background: #d2e3fc;
   }
-  table.assets-grid tbody tr.asset-inline-detail-row td {
+  table.assets-grid tbody tr.asset-data-row.is-selected:hover td,
+  table.assets-grid tbody tr.asset-data-row.is-selected:hover td.asset-actions-cell {
+    background: #c5d8f8;
+  }
+  .asset-detail-panel-wrap {
+    margin: 0 0 0.55rem;
     padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
     background: #fafbfd;
-    max-width: none;
-    overflow: visible;
-    white-space: normal;
-    border-bottom: 1px solid var(--border);
   }
   .asset-inline-detail {
     padding: 0.5rem 0.65rem 0.65rem;
-    border-top: 1px solid var(--border-subtle);
     overflow-x: auto;
   }
   .asset-detail-wireframe {

@@ -464,7 +464,7 @@ function renderAssetGrid_() {
     (_assetListRows || []).length +
     ' asset' +
     ((_assetListRows || []).length === 1 ? '' : 's') +
-    '. Ctrl+double-click a row for assignment, purchase, and last audit details.</p>';
+    '. Click a row to view assignment, purchase, and last audit details.</p>';
 
   el.querySelectorAll('.asset-th-btn').forEach(function (btn) {
     btn.addEventListener('click', function (ev) {
@@ -476,6 +476,7 @@ function renderAssetGrid_() {
     });
   });
   bindAssetRowDetailEvents_();
+  restoreAssetDetailSelection_();
 }
 
 function applyAssetFilter() {
@@ -1033,45 +1034,52 @@ function persistAssetView_(name) {
     .apiSaveAssetView({ name: name, config: config });
 }
 
-function getAssetGridColCount_() {
-  return 1 + getActiveAssetColumns_().length;
+var _assetDetailReqId = 0;
+
+function getAssetDetailPanel_() {
+  return document.getElementById('assetDetailPanel');
 }
 
-function clearAssetInlineDetail_() {
-  var row = document.querySelector('tr.asset-inline-detail-row');
-  if (row) row.remove();
+function findAssetDataRow_(assetId) {
+  if (!assetId) return null;
+  var rows = document.querySelectorAll('tr.asset-data-row');
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].getAttribute('data-asset-id') === assetId) return rows[i];
+  }
+  return null;
 }
 
-function insertAssetInlineDetailRow_(afterRow, html) {
-  clearAssetInlineDetail_();
-  if (!afterRow) return null;
-  var detailRow = document.createElement('tr');
-  detailRow.className = 'asset-inline-detail-row';
-  var assetId = afterRow.getAttribute('data-asset-id') || '';
-  if (assetId) detailRow.setAttribute('data-detail-asset-id', assetId);
-  var td = document.createElement('td');
-  td.colSpan = getAssetGridColCount_();
-  td.innerHTML = '<div class="asset-inline-detail">' + html + '</div>';
-  detailRow.appendChild(td);
-  afterRow.insertAdjacentElement('afterend', detailRow);
-  return detailRow;
+function setSelectedAssetRow_(tr) {
+  document.querySelectorAll('tr.asset-data-row.is-selected').forEach(function (row) {
+    row.classList.remove('is-selected');
+  });
+  if (tr) tr.classList.add('is-selected');
+}
+
+function restoreAssetDetailSelection_() {
+  var panel = getAssetDetailPanel_();
+  var id = panel && panel.getAttribute('data-asset-id');
+  if (!id) return;
+  setSelectedAssetRow_(findAssetDataRow_(id));
+}
+
+function setAssetDetailPanelHtml_(html) {
+  var panel = getAssetDetailPanel_();
+  if (!panel) return null;
+  panel.innerHTML = '<div class="asset-inline-detail">' + html + '</div>';
+  return panel.querySelector('.asset-inline-detail');
 }
 
 function bindAssetRowDetailEvents_() {
   var table = document.querySelector('table.assets-grid');
   if (!table) return;
   table.querySelectorAll('tr.asset-data-row').forEach(function (tr) {
-    tr.addEventListener('dblclick', function (e) {
-      if (e.target.closest('.asset-action-btn') || e.target.closest('.asset-th-btn')) return;
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      loadAssetDetailInline_(tr);
-    });
     tr.addEventListener('click', function (e) {
-      if (e.target.closest('.asset-action-btn') || e.target.closest('a') || e.target.closest('button')) {
+      if (e.target.closest('.asset-action-btn') || e.target.closest('.asset-th-btn') ||
+          e.target.closest('a') || e.target.closest('button')) {
         return;
       }
-      clearAssetInlineDetail_();
+      loadAssetDetailPanel_(tr);
     });
   });
 }
@@ -1276,20 +1284,28 @@ function bindAssetDetailPanelActions_(root, detail) {
   initAssetDetailCarousels_(root);
 }
 
-function loadAssetDetailInline_(tr) {
-  var assetId = tr.getAttribute('data-asset-id');
+function loadAssetDetailPanel_(tr) {
+  var assetId = tr && tr.getAttribute('data-asset-id');
   if (!assetId) {
     toast('This row has no Asset ID');
     return;
   }
-  var detailRow = insertAssetInlineDetailRow_(
-    tr,
-    '<div class="muted small">Loading details…</div>'
-  );
+  var panel = getAssetDetailPanel_();
+  if (!panel) return;
+  if (panel.getAttribute('data-asset-id') === assetId && panel.querySelector('.asset-detail-wireframe')) {
+    setSelectedAssetRow_(tr);
+    return;
+  }
+  var reqId = ++_assetDetailReqId;
+  setSelectedAssetRow_(tr);
+  panel.setAttribute('data-asset-id', assetId);
+  var wrap = setAssetDetailPanelHtml_('<div class="muted small">Loading details…</div>');
   google.script.run
     .withSuccessHandler(function (r) {
-      if (!detailRow || !document.contains(detailRow)) return;
-      var wrap = detailRow.querySelector('.asset-inline-detail');
+      if (reqId !== _assetDetailReqId) return;
+      if (!panel || !document.contains(panel)) return;
+      wrap = panel.querySelector('.asset-inline-detail') || setAssetDetailPanelHtml_('');
+      if (!wrap) return;
       if (!r || !r.ok || !r.detail) {
         wrap.innerHTML =
           '<div class="muted small">' + escapeHtml((r && r.error) || 'Failed to load details') + '</div>';
@@ -1299,8 +1315,9 @@ function loadAssetDetailInline_(tr) {
       bindAssetDetailPanelActions_(wrap, r.detail);
     })
     .withFailureHandler(function (e) {
-      if (!detailRow || !document.contains(detailRow)) return;
-      var wrap = detailRow.querySelector('.asset-inline-detail');
+      if (reqId !== _assetDetailReqId) return;
+      if (!panel || !document.contains(panel)) return;
+      wrap = panel.querySelector('.asset-inline-detail');
       if (wrap) wrap.innerHTML = '<div class="muted small">' + escapeHtml(String(e)) + '</div>';
     })
     .apiGetAssetDetail({ assetId: assetId });
