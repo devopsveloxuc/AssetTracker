@@ -1,33 +1,46 @@
 ---
-description: GitHub first, then EquipCareAI clasp deploy to development
+description: EquipCareAI Git branch + GAS deploy (push to dev / push to prod)
 alwaysApply: true
 ---
 
 # EquipCareAI deploy: GitHub → GAS
 
-When shipping EquipCareAI Apps Script changes after code edits, **do not clasp-deploy from uncommitted/unpushed work**. Order:
+When shipping EquipCareAI Apps Script changes after code edits, **do not clasp-deploy from uncommitted/unpushed work**.
 
-## 1. GitHub first
+## User phrases (canonical)
 
-1. Commit the relevant changes (only when the user asks to commit, or when they asked to ship/deploy and commit is required to push).
-2. Push to GitHub remote `origin` → [devopsveloxuc/AssetTracker](https://github.com/devopsveloxuc/AssetTracker) on the current branch.
-3. Confirm the push succeeded before any clasp step.
-4. If `origin` is missing or not AssetTracker, stop and fix remotes (or ask the user) — do not skip to GAS.
+| User says | Git | GAS |
+|-----------|-----|-----|
+| **push to dev** | Commit (if needed) + push branch **`dev`** | Deploy **development** only |
+| **push to prod** | Commit (if needed) + push branch **`prod`** | Deploy **production** only |
 
-## 2. Then GAS (clasp)
+Do **not** update the other GAS deployment unless the user also asks for it.
 
-1. Run `clasp push` (usually `--force`).
-2. Create a new version with `clasp version "<short description>"`.
-3. **Default deploy target is development** — update this deployment only unless the user explicitly asks for production:
+## Branches
 
-   - **development** ID: `AKfycbz3hpACRe33kv9qw0Lee18MP_mQBBoD7o8bNo-b3BtV1tBT57I0kEnkaN77DHWCt0oz`
-   - Example: `clasp deploy -i AKfycbz3hpACRe33kv9qw0Lee18MP_mQBBoD7o8bNo-b3BtV1tBT57I0kEnkaN77DHWCt0oz -V <n> -d "development"`
+Same repo ([devopsveloxuc/AssetTracker](https://github.com/devopsveloxuc/AssetTracker)):
 
-4. **Do not** update production unless the user explicitly requests it:
+- **`dev`** ↔ GAS **development**
+- **`prod`** ↔ GAS **production**
 
-   - **production** ID: `AKfycbwEzoeFO4LE29fNtuFyO5SvNVSdQnOb_GCxgHrgVT-B5eHBRS8mC-en73XrU29zLB-6`
+Before shipping:
 
-## 3. Report
+1. Check out the matching branch (`dev` or `prod`).
+2. If work is on `dev` and the user said **push to prod**, merge or fast-forward `dev` into `prod` (or cherry-pick), then push `prod` — do not leave prod behind without integrating the intended commits.
+3. Confirm `origin` is AssetTracker; stop and fix remotes if not.
+
+## Order every ship
+
+1. **GitHub first** — commit relevant changes when ship requires it, push the target branch, confirm push succeeded.
+2. **Then GAS (clasp)**
+   1. `clasp push` (usually `--force`)
+   2. `clasp version "<short description>"`
+   3. Deploy the matching deployment only:
+      - **development** ID: `AKfycbz3hpACRe33kv9qw0Lee18MP_mQBBoD7o8bNo-b3BtV1tBT57I0kEnkaN77DHWCt0oz`
+      - **production** ID: `AKfycbwEzoeFO4LE29fNtuFyO5SvNVSdQnOb_GCxgHrgVT-B5eHBRS8mC-en73XrU29zLB-6`
+      - Example: `clasp deploy -i <id> -V <n> -d "development"` or `"production"`
+
+## Report
 
 After deploy, briefly report:
 
